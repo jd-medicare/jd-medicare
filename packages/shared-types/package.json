@@ -1,0 +1,10 @@
+{
+  "name": "@app/shared-types",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "files": ["dist", "api-registry.json"],
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "echo \"tested via apps/api\"" },
+  "devDependencies": { "typescript": "^5.6.3" }
+}

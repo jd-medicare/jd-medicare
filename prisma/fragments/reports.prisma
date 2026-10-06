@@ -1,0 +1,49 @@
+// Account 3 fragment. No datasource/generator blocks. Merged after schema.base.prisma.
+// organizationId / requestedById are plain UUID columns on purpose (no @relation):
+// Prisma requires back-relation fields on Organization/User, which Account 1 owns.
+// Foreign keys can be added at merge (see reports/CHANGE_REQUESTS.md).
+
+enum ExportStatus {
+  QUEUED
+  RUNNING
+  READY
+  FAILED
+}
+
+enum ExportFormat {
+  CSV
+  XLSX
+  PDF
+}
+
+enum ExportReportType {
+  OUTSOURCE
+  TEAM_LEADER
+  ADMIN
+  FINANCE
+}
+
+model ReportExport {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  requestedById  String           @db.Uuid
+  reportType     ExportReportType
+  format         ExportFormat
+  status         ExportStatus     @default(QUEUED)
+  /// Validated, whitelisted filter object. May contain a phone prefix (PII): never log it.
+  filters        Json
+  /// Tenant-prefixed key: exports/<organizationId>/<id>.<ext>. Never built from client input.
+  storageKey     String?
+  rowCount       Int?
+  fileSizeBytes  Int?
+  attempts       Int              @default(0)
+  errorCode      String?
+  errorMessage   String?
+  createdAt      DateTime         @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+
+  @@index([organizationId, requestedById, createdAt])
+  @@index([organizationId, status])
+  @@map("report_exports")
+}

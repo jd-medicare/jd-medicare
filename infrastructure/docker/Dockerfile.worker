@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1.7
+# The worker is the API image with a different entrypoint (BullMQ processors, no HTTP listener).
+#   docker build -f infrastructure/docker/Dockerfile.worker --build-arg API_IMAGE=ghcr.io/org/app-api:TAG -t app-worker .
+ARG API_IMAGE
+FROM ${API_IMAGE}
+USER node
+ENV WORKER=1
+# no HTTP port on the worker: replace the inherited HTTP healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+  CMD node -e "process.exit(0)"
+CMD ["node","dist/worker.js"]

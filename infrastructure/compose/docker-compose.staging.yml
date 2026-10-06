@@ -1,0 +1,139 @@
+# Staging-like / single-host production stack.
+#   ENV_FILE=../env/.env.staging IMAGE_TAG=<git sha> REGISTRY=ghcr.io/org \
+#     docker compose -f docker-compose.staging.yml --env-file ../env/.env.staging --profile bundled-data up -d
+# Production with MANAGED Postgres / S3: omit the `bundled-data` profile; DATABASE_URL and S3_* point at the managed services.
+name: app
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?}
+      STORAGE_PUBLIC_ORIGIN: ${STORAGE_PUBLIC_ORIGIN:?}
+      CI_BYPASS_TOKEN: ${CI_BYPASS_TOKEN:-}
+      NGINX_ENVSUBST_FILTER: "^(DOMAIN|STORAGE_PUBLIC_ORIGIN|CI_BYPASS_TOKEN)$$"
+    volumes:
+      - ../proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ../proxy/snippets:/etc/nginx/snippets:ro
+      - ${TLS_CERT_DIR:-/etc/app/certs}:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot:ro
+    networks: [edge, internal]
+    depends_on: [web, api]
+    security_opt: ["no-new-privileges:true"]
+    logging: { driver: json-file, options: { max-size: "50m", max-file: "10" } }
+
+  web:
+    <<: *hardened
+    image: ${REGISTRY:?}/app-web:${IMAGE_TAG:?}
+    networks: [internal]
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+
+  api:
+    <<: *hardened
+    image: ${REGISTRY:?}/app-api:${IMAGE_TAG:?}
+    env_file: ${ENV_FILE:-../env/.env.staging}
+    environment:
+      QUEUE_WORKERS: "off"            # HTTP only; the worker service consumes the queues
+    networks: [internal, egress]      # no published ports: only the proxy reaches it
+
+  worker:
+    <<: *hardened
+    image: ${REGISTRY:?}/app-worker:${IMAGE_TAG:?}
+    env_file: ${ENV_FILE:-../env/.env.staging}
+    environment:
+      QUEUE_WORKERS: "on"
+    networks: [internal, egress]
+
+  migrate:
+    image: ${REGISTRY:?}/app-migrate:${IMAGE_TAG:?}
+    env_file: ${ENV_FILE:-../env/.env.staging}
+    profiles: [migrate]
+    networks: [internal]
+    restart: "no"
+
+  redis:
+    <<: *hardened
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?}", "--appendonly", "yes", "--protected-mode", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: [redisdata:/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD}' ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: [bundled-data]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    profiles: [bundled-data]
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?}
+    volumes: [miniodata:/data]
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    # Browsers use presigned URLs against STORAGE_PUBLIC_ORIGIN. Publish that host through your CDN/LB to minio:9000
+    # (see docs/tls-cdn-waf.md). Prefer managed S3 in production.
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    profiles: [observability]
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes: ["../observability/otel-collector.yaml:/etc/otel/config.yaml:ro"]
+    networks: [internal, egress]
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    profiles: [observability]
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=30d"]
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - promdata:/prometheus
+    networks: [internal]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: [observability]
+    restart: unless-stopped
+    volumes: ["../observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"]
+    networks: [internal, egress]
+
+networks:
+  edge: {}
+  egress: {}
+  internal: { internal: true }
+
+volumes: { pgdata: {}, redisdata: {}, miniodata: {}, promdata: {}, certbot-webroot: {} }

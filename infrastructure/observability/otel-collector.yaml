@@ -1,0 +1,30 @@
+# OpenTelemetry Collector: apps push OTLP here (no /metrics route is added to the API, so the registry/contract stays untouched).
+receivers:
+  otlp:
+    protocols:
+      http: { endpoint: 0.0.0.0:4318 }
+      grpc: { endpoint: 0.0.0.0:4317 }
+processors:
+  memory_limiter: { check_interval: 1s, limit_percentage: 75, spike_limit_percentage: 20 }
+  batch: { timeout: 5s }
+  # defence in depth: strip anything that looks like a credential or PII even if an app attribute slips through
+  attributes/scrub:
+    actions:
+      - { key: http.request.header.authorization, action: delete }
+      - { key: http.request.header.cookie, action: delete }
+      - { key: http.response.header.set-cookie, action: delete }
+      - { key: http.request.header.x-csrf-token, action: delete }
+      - { key: db.statement, action: hash }
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion: { enabled: true }
+  # traces: set OTLP_TRACES_ENDPOINT / headers to your backend (Tempo, Jaeger, Honeycomb, Grafana Cloud, ...)
+  otlphttp/traces:
+    endpoint: ${env:OTLP_TRACES_ENDPOINT}
+    headers: { authorization: "${env:OTLP_TRACES_AUTH}" }
+service:
+  telemetry: { logs: { level: info } }
+  pipelines:
+    metrics: { receivers: [otlp], processors: [memory_limiter, batch], exporters: [prometheus] }
+    traces:  { receivers: [otlp], processors: [memory_limiter, attributes/scrub, batch], exporters: [otlphttp/traces] }

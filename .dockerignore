@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+.git
+.github
+tests
+docs
+infrastructure/compose
+infrastructure/env
+infrastructure/proxy
+infrastructure/backup
+infrastructure/observability
+**/.env*
+**/*.log
+coverage

@@ -1,0 +1,96 @@
+# METRIC-NAME ASSUMPTIONS (verify at merge against what apps/api actually emits):
+#  - OTel HTTP server semantic conventions exported to Prometheus: http_server_request_duration_seconds_{bucket,count}
+#    with labels http_response_status_code, http_route
+#  - Business counters: app_auth_login_total{outcome="failure|success|locked"}, app_rate_limited_total, app_case_decision_total{decision}
+#  - Queue gauges (BullMQ): app_queue_jobs{queue,state="waiting|failed|active"}
+#  - Backup freshness from scripts/backup-postgres.sh textfile: backup_last_success_timestamp_seconds, restore_test_last_success_timestamp_seconds
+groups:
+  - name: availability
+    rules:
+      - alert: ApiDown
+        expr: probe_success{job="blackbox-https"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations: { summary: "HTTPS health probe failing", runbook: "docs/operations-runbook.md#api-down" }
+      - alert: CertificateExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry{job="blackbox-https"} - time() < 14 * 86400
+        for: 1h
+        labels: { severity: ticket }
+        annotations: { summary: "TLS certificate expires in < 14 days", runbook: "docs/tls-cdn-waf.md#renewal" }
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels: { severity: page }
+        annotations: { summary: "PostgreSQL is down", runbook: "docs/operations-runbook.md#postgres-down" }
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels: { severity: page }
+        annotations: { summary: "Redis is down (sessions and queues affected)", runbook: "docs/operations-runbook.md#redis-down" }
+  - name: api-quality
+    rules:
+      - alert: High5xxRate
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+          / sum(rate(http_server_request_duration_seconds_count[5m])) > 0.02
+        for: 5m
+        labels: { severity: page }
+        annotations: { summary: ">2% of API requests failing with 5xx", runbook: "docs/operations-runbook.md#high-5xx" }
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket[5m]))) > 1.5
+        for: 10m
+        labels: { severity: ticket }
+        annotations: { summary: "API p95 latency above 1.5s", runbook: "docs/operations-runbook.md#slow-api" }
+  - name: security
+    rules:
+      - alert: LoginFailureSpike
+        expr: sum(rate(app_auth_login_total{outcome="failure"}[5m])) > 1
+        for: 5m
+        labels: { severity: ticket }
+        annotations: { summary: "Sustained failed logins (possible credential stuffing)", runbook: "docs/operations-runbook.md#auth-attack" }
+      - alert: RateLimitSpike
+        expr: sum(rate(app_rate_limited_total[5m])) > 5
+        for: 10m
+        labels: { severity: ticket }
+        annotations: { summary: "Heavy rate limiting in effect", runbook: "docs/operations-runbook.md#auth-attack" }
+      - alert: AccountLockSpike
+        expr: increase(app_auth_login_total{outcome="locked"}[15m]) > 10
+        labels: { severity: ticket }
+        annotations: { summary: ">10 account lockouts in 15 minutes" }
+      - alert: ForbiddenSpike
+        expr: sum(rate(http_server_request_duration_seconds_count{http_response_status_code="403"}[5m])) > 2
+        for: 10m
+        labels: { severity: ticket }
+        annotations: { summary: "Sustained 403s: possible privilege probing / IDOR scan" }
+  - name: jobs
+    rules:
+      - alert: QueueBacklog
+        expr: app_queue_jobs{state="waiting"} > 500
+        for: 15m
+        labels: { severity: ticket }
+        annotations: { summary: "BullMQ backlog > 500 for 15m (exports delayed)", runbook: "docs/operations-runbook.md#queue-backlog" }
+      - alert: FailedJobs
+        expr: increase(app_queue_jobs{state="failed"}[1h]) > 5
+        labels: { severity: ticket }
+        annotations: { summary: ">5 failed jobs in an hour" }
+  - name: backups-and-capacity
+    rules:
+      - alert: BackupStale
+        expr: time() - backup_last_success_timestamp_seconds > 26 * 3600
+        for: 10m
+        labels: { severity: page }
+        annotations: { summary: "No successful DB backup in 26h (RPO at risk)", runbook: "docs/backup-dr.md#failure" }
+      - alert: RestoreTestStale
+        expr: time() - restore_test_last_success_timestamp_seconds > 9 * 86400
+        labels: { severity: ticket }
+        annotations: { summary: "No successful restore test in 9 days", runbook: "docs/backup-dr.md#restore-test" }
+      - alert: DiskFillingUp
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes) < 0.15
+        for: 15m
+        labels: { severity: ticket }
+        annotations: { summary: "Less than 15% disk free" }
+      - alert: PostgresConnectionsHigh
+        expr: sum(pg_stat_activity_count) / max(pg_settings_max_connections) > 0.8
+        for: 10m
+        labels: { severity: ticket }
+        annotations: { summary: "Postgres connections above 80% of max" }

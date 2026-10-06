@@ -1,0 +1,5 @@
+# /etc/cron.d/app-backup   (app host)   - all times UTC
+MAILTO=ops@example.com
+30 2 * * *  deploy  cd /opt/app && BACKUP_ENV_FILE=infrastructure/env/.env.backup bash scripts/backup-postgres.sh >> /var/log/app-backup.log 2>&1
+# /etc/cron.d/app-restore-test   (SEPARATE DR/test host holding the age identity)
+0 5 * * 0   drtest  cd /opt/app && bash scripts/restore-test.sh >> /var/log/app-restore-test.log 2>&1

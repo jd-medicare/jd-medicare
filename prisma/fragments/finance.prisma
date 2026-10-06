@@ -1,0 +1,309 @@
+// Account 6 fragment: finance, files, integrations, notifications.
+// No datasource/generator blocks (those live in schema.base.prisma, Account 1).
+//
+// Cross-fragment references (Organization, User, cases) are plain @db.Uuid columns WITHOUT Prisma
+// relations, so Account 1's and Account 2's models need no back-relation fields. Add real foreign
+// keys in the merge migration if wanted.
+//
+// MERGE NOTE (raw SQL in the initial migration). Columns keep camelCase names (A5 maps tables only),
+// so they must be double-quoted:
+//   ALTER TABLE payments ADD CONSTRAINT payments_one_target
+//     CHECK (("incomeId" IS NOT NULL)::int + ("expenseId" IS NOT NULL)::int = 1);
+//   ALTER TABLE incomes  ADD CONSTRAINT incomes_amount_positive  CHECK ("amount" > 0);
+//   ALTER TABLE expenses ADD CONSTRAINT expenses_amount_positive CHECK ("amount" > 0);
+//   ALTER TABLE incomes  ADD CONSTRAINT incomes_void_consistent
+//     CHECK (("status" = 'VOIDED') = ("voidReason" IS NOT NULL AND "voidedAt" IS NOT NULL AND "voidedById" IS NOT NULL));
+//   (same void_consistent check on expenses)
+// Financial rows are never deleted: the application has no delete path. Optionally also add a
+// BEFORE DELETE trigger on incomes/expenses/financial_transactions that raises an exception.
+
+enum FinanceStatus {
+  ACTIVE
+  VOIDED
+}
+
+enum FinancialTransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum AttachmentStatus {
+  PENDING
+  AVAILABLE
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum IntegrationRequestStatus {
+  PENDING
+  SUCCEEDED
+  RETRYING
+  FAILED
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+enum NotificationEmailStatus {
+  NONE
+  QUEUED
+  SENT
+  FAILED
+}
+
+model ExpenseHead {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String   @db.VarChar(100)
+  /// lower-cased trimmed name; enforces case-insensitive uniqueness per organization
+  nameKey        String   @db.VarChar(100)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  expenses Expense[]
+
+  @@unique([organizationId, nameKey])
+  @@index([organizationId, isActive])
+  @@map("expense_heads")
+}
+
+model Income {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  amount         Decimal       @db.Decimal(18, 2)
+  currency       String        @db.VarChar(3)
+  date           DateTime      @db.Date
+  category       String        @db.VarChar(100)
+  reference      String?       @db.VarChar(200)
+  description    String?       @db.Text
+  /// id of a case owned by the cases module; intentionally not a foreign key across fragments
+  relatedCaseId  String?       @db.Uuid
+  status         FinanceStatus @default(ACTIVE)
+  voidReason     String?       @db.Text
+  voidedAt       DateTime?     @db.Timestamptz(6)
+  voidedById     String?       @db.Uuid
+  createdById    String        @db.Uuid
+  createdAt      DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(6)
+
+  transaction FinancialTransaction?
+  payments    Payment[]
+
+  @@index([organizationId, date])
+  @@index([organizationId, status, date])
+  @@index([organizationId, relatedCaseId])
+  @@map("incomes")
+}
+
+model Expense {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  expenseHeadId  String        @db.Uuid
+  amount         Decimal       @db.Decimal(18, 2)
+  currency       String        @db.VarChar(3)
+  date           DateTime      @db.Date
+  payee          String?       @db.VarChar(200)
+  reference      String?       @db.VarChar(200)
+  description    String?       @db.Text
+  status         FinanceStatus @default(ACTIVE)
+  voidReason     String?       @db.Text
+  voidedAt       DateTime?     @db.Timestamptz(6)
+  voidedById     String?       @db.Uuid
+  createdById    String        @db.Uuid
+  createdAt      DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(6)
+
+  expenseHead ExpenseHead          @relation(fields: [expenseHeadId], references: [id], onDelete: Restrict)
+  transaction FinancialTransaction?
+  payments    Payment[]
+
+  @@index([organizationId, date])
+  @@index([organizationId, status, date])
+  @@index([organizationId, expenseHeadId])
+  @@map("expenses")
+}
+
+/// Settlement record (money actually received or paid), optionally confirmed by an external provider.
+model Payment {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  incomeId       String?  @db.Uuid
+  expenseId      String?  @db.Uuid
+  method         String   @db.VarChar(50)
+  amount         Decimal  @db.Decimal(18, 2)
+  currency       String   @db.VarChar(3)
+  paidAt         DateTime @db.Timestamptz(6)
+  integrationId  String?  @db.Uuid
+  externalId     String?  @db.VarChar(200)
+  createdById    String?  @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  income  Income?  @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  expense Expense? @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, integrationId, externalId])
+  @@index([organizationId, paidAt])
+  @@map("payments")
+}
+
+/// One ledger row per income/expense, written in the same database transaction as its source row.
+/// Backs finance.transactions and keeps the unified listing cheap and consistent.
+model FinancialTransaction {
+  id             String                   @id @default(uuid()) @db.Uuid
+  organizationId String                   @db.Uuid
+  type           FinancialTransactionType
+  incomeId       String?                  @unique @db.Uuid
+  expenseId      String?                  @unique @db.Uuid
+  date           DateTime                 @db.Date
+  amount         Decimal                  @db.Decimal(18, 2)
+  currency       String                   @db.VarChar(3)
+  /// income category, or the expense head name at write time
+  category       String                   @db.VarChar(100)
+  reference      String?                  @db.VarChar(200)
+  status         FinanceStatus            @default(ACTIVE)
+  createdAt      DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                 @updatedAt @db.Timestamptz(6)
+
+  income  Income?  @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  expense Expense? @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, date])
+  @@index([organizationId, type, date])
+  @@map("financial_transactions")
+}
+
+model Attachment {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  uploadedById   String           @db.Uuid
+  /// randomized object key; never derived from the file name
+  storageKey     String           @unique @db.VarChar(300)
+  fileName       String           @db.VarChar(200)
+  mimeType       String           @db.VarChar(100)
+  sizeBytes      Int
+  status         AttachmentStatus @default(PENDING)
+  entityType     String?          @db.VarChar(50)
+  entityId       String?          @db.Uuid
+  createdAt      DateTime         @default(now()) @db.Timestamptz(6)
+  availableAt    DateTime?        @db.Timestamptz(6)
+
+  accessLogs AttachmentAccessLog[]
+
+  @@index([organizationId, uploadedById])
+  @@index([organizationId, entityType, entityId])
+  @@map("attachments")
+}
+
+/// Append-only evidence of every upload-URL and download-URL issuance.
+model AttachmentAccessLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  attachmentId   String   @db.Uuid
+  userId         String   @db.Uuid
+  action         String   @db.VarChar(40)
+  requestId      String?  @db.VarChar(100)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, attachmentId])
+  @@index([organizationId, userId, createdAt])
+  @@map("attachment_access_logs")
+}
+
+model Notification {
+  id             String                  @id @default(uuid()) @db.Uuid
+  organizationId String                  @db.Uuid
+  userId         String                  @db.Uuid
+  type           String                  @db.VarChar(60)
+  title          String                  @db.VarChar(200)
+  body           String                  @db.Text
+  data           Json?
+  readAt         DateTime?               @db.Timestamptz(6)
+  emailStatus    NotificationEmailStatus @default(NONE)
+  emailAttempts  Int                     @default(0)
+  emailError     String?                 @db.VarChar(500)
+  emailSentAt    DateTime?               @db.Timestamptz(6)
+  createdAt      DateTime                @default(now()) @db.Timestamptz(6)
+
+  @@index([organizationId, userId, readAt])
+  @@index([organizationId, userId, createdAt])
+  @@map("notifications")
+}
+
+model Integration {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  provider       String            @db.VarChar(50)
+  name           String            @db.VarChar(100)
+  status         IntegrationStatus @default(ACTIVE)
+  /// NAME of the environment variable / secret-manager key holding the webhook signing secret.
+  /// Secrets themselves are never stored in the database.
+  secretRef      String            @db.VarChar(100)
+  config         Json?
+  createdAt      DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(6)
+
+  requests IntegrationRequest[]
+  webhooks WebhookEvent[]
+
+  @@unique([organizationId, provider, name])
+  @@map("integrations")
+}
+
+/// Outbound call tracking: request, response, external id, status, retries.
+model IntegrationRequest {
+  id              String                   @id @default(uuid()) @db.Uuid
+  organizationId  String                   @db.Uuid
+  integrationId   String                   @db.Uuid
+  operation       String                   @db.VarChar(100)
+  idempotencyKey  String                   @db.VarChar(200)
+  status          IntegrationRequestStatus @default(PENDING)
+  attempts        Int                      @default(0)
+  maxAttempts     Int                      @default(5)
+  /// redacted before storage (see integrations/redact.ts)
+  requestPayload  Json
+  responsePayload Json?
+  httpStatus      Int?
+  externalId      String?                  @db.VarChar(200)
+  lastError       String?                  @db.VarChar(500)
+  nextRetryAt     DateTime?                @db.Timestamptz(6)
+  createdAt       DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime                 @updatedAt @db.Timestamptz(6)
+  completedAt     DateTime?                @db.Timestamptz(6)
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([integrationId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([status, nextRetryAt])
+  @@map("integration_requests")
+}
+
+/// Inbound webhook ledger. The unique (integrationId, eventId) pair is the idempotency guard.
+model WebhookEvent {
+  id                 String             @id @default(uuid()) @db.Uuid
+  organizationId     String             @db.Uuid
+  integrationId      String             @db.Uuid
+  eventId            String             @db.VarChar(200)
+  eventType          String             @db.VarChar(100)
+  status             WebhookEventStatus @default(RECEIVED)
+  signatureTimestamp DateTime           @db.Timestamptz(6)
+  payload            Json
+  error              String?            @db.VarChar(500)
+  receivedAt         DateTime           @default(now()) @db.Timestamptz(6)
+  processedAt        DateTime?          @db.Timestamptz(6)
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([integrationId, eventId])
+  @@index([organizationId, status])
+  @@map("webhook_events")
+}

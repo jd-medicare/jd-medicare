@@ -1,0 +1,505 @@
+/**
+ * DB-backed end-to-end tests for Account 2 (Fastify + real Postgres, stub auth via `x-stub-user`).
+ * Skipped automatically unless DATABASE_URL is set. Use a THROWAWAY database:
+ *   cd apps/api/src/(removed) && npm i && npm run schema && npm run db:push && DATABASE_URL=... npm run test:e2e
+ * Every test builds its own organization ("world"), so tests are independent and counts are deterministic.
+ */
+import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
+import { Test } from '@nestjs/testing';
+import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import { CallRecordsModule } from '../../call-records/call-records.module';
+import { CustomersModule } from '../../customers/customers.module';
+import { OutsourceModule } from '../../outsource/outsource.module';
+import { ErrorEnvelopeFilter } from '../../_stubs/error-envelope.filter';
+import { WorkflowModule } from '../../workflow/workflow.module';
+import { CaseQueryService } from '../case-query.service';
+import { CasesModule } from '../cases.module';
+import { AuditService, PrismaService } from '../deps';
+
+const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
+
+// ---- A6 default permissions -------------------------------------------------
+const PERMS = {
+  AGENT: ['customer:create', 'customer:view', 'case:create', 'case:view'],
+  TEAM_LEADER: ['customer:view', 'customer:update', 'case:view', 'case:update', 'call_length:view', 'call_length:create', 'call_length:update', 'report:view'],
+  OUTSOURCE: ['case:view', 'case:accept', 'case:reject', 'call_length:view', 'report:view'],
+  // ADMIN holding what the Primary Super Admin assigned for this scenario:
+  ADMIN: ['user:view', 'report:view', 'case:view', 'customer:view', 'case:modify_processed'],
+} as const;
+
+interface U { id: string; organizationId: string; roleKey: string; permissions: string[] }
+interface World { orgId: string; agent: U; agent2: U; tl: U; os1: U; os2: U; admin: U }
+
+describeDb('Account 2 - case workflow (e2e)', () => {
+  let app: NestFastifyApplication;
+  let prisma: PrismaService;
+  let audit: AuditService;
+  let phoneSeq = 0;
+
+  const phone = () => `+92300${String(Date.now()).slice(-5)}${String(++phoneSeq).padStart(3, '0')}`;
+  const customerBody = (p = phone(), over: Record<string, unknown> = {}) => ({
+    firstName: 'Ayesha', lastName: 'Khan', phone: p, dateOfBirth: '1990-02-28',
+    address: '12 Main Road', zipCode: '25000', extra: { plan: 'gold' }, ...over,
+  });
+
+  async function call(user: U | null, method: 'GET' | 'POST' | 'PUT' | 'PATCH', url: string, payload?: unknown) {
+    const res = await app.inject({
+      method, url: `/api/v1${url}`,
+      headers: { 'content-type': 'application/json', ...(user ? { 'x-stub-user': JSON.stringify(user) } : {}) },
+      payload: payload === undefined ? undefined : JSON.stringify(payload),
+    });
+    return { status: res.statusCode, body: res.json() as any, headers: res.headers };
+  }
+
+  async function makeWorld(): Promise<World> {
+    const orgId = randomUUID();
+    await prisma.organization.create({ data: { id: orgId } });
+    const mk = async (roleKey: keyof typeof PERMS, name: string): Promise<U> => {
+      const id = randomUUID();
+      await prisma.user.create({ data: { id, organizationId: orgId, email: `${name}-${id}@t.test`, fullName: name } });
+      return { id, organizationId: orgId, roleKey, permissions: [...PERMS[roleKey]] };
+    };
+    return {
+      orgId,
+      agent: await mk('AGENT', 'Agent One'), agent2: await mk('AGENT', 'Agent Two'),
+      tl: await mk('TEAM_LEADER', 'Lead One'),
+      os1: await mk('OUTSOURCE', 'Outsource One'), os2: await mk('OUTSOURCE', 'Outsource Two'),
+      admin: await mk('ADMIN', 'Admin One'),
+    };
+  }
+
+  async function newCase(w: World, agent = w.agent, body = customerBody()) {
+    const r = await call(agent, 'POST', '/customers', body);
+    expect(r.status).toBe(201);
+    return { caseId: r.body.data.case.id as string, customerId: r.body.data.customer.id as string, res: r };
+  }
+
+  const expectErr = (r: { status: number; body: any }, status: number, code: string) => {
+    expect(r.status).toBe(status);
+    expect(r.body.error.code).toBe(code);
+    expect(typeof r.body.error.message).toBe('string');
+    expect(r.body.error.requestId).toBeDefined();
+  };
+
+  beforeAll(async () => {
+    const mod = await Test.createTestingModule({
+      imports: [CustomersModule, CasesModule, WorkflowModule, OutsourceModule, CallRecordsModule],
+    }).compile();
+    app = mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    app.setGlobalPrefix('api/v1');
+    app.useGlobalFilters(new ErrorEnvelopeFilter());
+    await app.init();
+    await app.getHttpAdapter().getInstance().ready();
+    prisma = app.get(PrismaService);
+    audit = app.get(AuditService);
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  // ---------------------------------------------------------------------------
+  it('full flow: agent -> team leader -> outsource accept -> modify processed, with history and audit', async () => {
+    const w = await makeWorld();
+
+    // 1. Agent creates: customer + case, SUBMITTED then PENDING
+    const { caseId, customerId, res } = await newCase(w);
+    const created = res.body.data.case;
+    expect(created).toMatchObject({ status: 'PENDING', version: 1, processedAt: null, processedBy: null, teamLeader: null, callLengthSeconds: null });
+    expect(created.agent).toEqual({ id: w.agent.id, fullName: 'Agent One' });
+    expect(res.body.data.customer).toMatchObject({ id: customerId, dateOfBirth: '1990-02-28', address: '12 Main Road', zipCode: '25000' });
+
+    const trs = await prisma.workflowTransition.findMany({ where: { caseId }, orderBy: { seq: 'asc' } });
+    expect(trs.map((t) => [t.fromStatus, t.toStatus, t.actorId])).toEqual([
+      [null, 'SUBMITTED', w.agent.id],
+      ['SUBMITTED', 'PENDING', null],
+    ]);
+
+    // 2. Team leader edits (optimistic lock) and sets call length
+    const edit = await call(w.tl, 'PATCH', `/cases/${caseId}`, { customer: { lastName: 'Ali' }, expectedVersion: 1, reason: 'Typo' });
+    expect(edit.status).toBe(200);
+    expect(edit.body.data).toMatchObject({ version: 2, teamLeader: { id: w.tl.id } });
+    expect(edit.body.data.customer.lastName).toBe('Ali');
+
+    expectErr(await call(w.tl, 'PATCH', `/cases/${caseId}`, { customer: { lastName: 'Zed' }, expectedVersion: 1 }), 409, 'VERSION_CONFLICT');
+
+    const len = await call(w.tl, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 342 });
+    expect(len.status).toBe(200);
+    expect(len.body.data).toMatchObject({ callLengthSeconds: 342, callLengthDisplay: '00:05:42', version: 3 });
+    const len2 = await call(w.tl, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 3725 });
+    expect(len2.body.data).toMatchObject({ callLengthDisplay: '01:02:05', version: 4 });
+    const same = await call(w.tl, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 3725 });
+    expect(same.body.data.version).toBe(4); // unchanged value => no write
+
+    // 3. Agent never sees call length; team leader does
+    const asAgent = await call(w.agent, 'GET', `/cases/${caseId}`);
+    expect(asAgent.body.data).toMatchObject({ callLengthSeconds: null, callLengthDisplay: null });
+
+    // 4. Outsource: phone search, restricted fields, summary
+    const prefix = encodeURIComponent((await prisma.customer.findUniqueOrThrow({ where: { id: customerId } })).phone.slice(0, 9));
+    const list = await call(w.os1, 'GET', `/outsource/cases?phone=${prefix}`);
+    expect(list.status).toBe(200);
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].customer).toMatchObject({ dateOfBirth: null, address: null, extra: {} });
+    expect(list.body.data[0].callLengthDisplay).toBe('01:02:05');
+    expect((await call(w.os1, 'GET', '/outsource/summary')).body.data).toEqual({
+      total: 1, accepted: 0, rejected: 0, pending: 1, remaining: 1, processingRate: 0, acceptanceRate: 0, rejectionRate: 0,
+    });
+
+    // 5. Accept: confirm is mandatory and exact
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/accept`, {}), 400, 'CONFIRMATION_REQUIRED');
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'confirm' }), 400, 'CONFIRMATION_REQUIRED');
+    const accepted = await call(w.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.data).toMatchObject({ status: 'ACCEPTED', processedBy: { id: w.os1.id }, version: 5 });
+    expect(accepted.body.data.processedAt).toEqual(expect.any(String));
+
+    // 6. Already processed: everything that would change it is refused
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' }), 409, 'CASE_ALREADY_PROCESSED');
+    expectErr(await call(w.os2, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM', reason: 'x' }), 409, 'CASE_ALREADY_PROCESSED');
+    expectErr(await call(w.tl, 'PATCH', `/cases/${caseId}`, { customer: { lastName: 'Q' }, expectedVersion: 5 }), 409, 'CASE_ALREADY_PROCESSED');
+    expectErr(await call(w.tl, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 1 }), 409, 'CASE_ALREADY_PROCESSED');
+    expectErr(await call(w.tl, 'PATCH', `/customers/${customerId}`, { lastName: 'Q' }), 409, 'CASE_ALREADY_PROCESSED');
+
+    // 7. Modify processed: permission, confirm, reason, version
+    const mod = { confirm: 'CONFIRM', reason: 'Wrong zip code', expectedVersion: 5, customer: { zipCode: '44000' } };
+    expectErr(await call(w.tl, 'POST', `/cases/${caseId}/modify-processed`, mod), 403, 'FORBIDDEN');
+    expectErr(await call(w.admin, 'POST', `/cases/${caseId}/modify-processed`, { ...mod, confirm: undefined }), 400, 'CONFIRMATION_REQUIRED');
+    expectErr(await call(w.admin, 'POST', `/cases/${caseId}/modify-processed`, { ...mod, reason: '  ' }), 400, 'VALIDATION_ERROR');
+    expectErr(await call(w.admin, 'POST', `/cases/${caseId}/modify-processed`, { ...mod, expectedVersion: 4 }), 409, 'VERSION_CONFLICT');
+    const modified = await call(w.admin, 'POST', `/cases/${caseId}/modify-processed`, mod);
+    expect(modified.status).toBe(200);
+    expect(modified.body.data).toMatchObject({ status: 'ACCEPTED', version: 6, processedBy: { id: w.os1.id } });
+    expect(modified.body.data.customer.zipCode).toBe('44000');
+
+    // 8. History: complete, ordered, nothing lost
+    const hist = await call(w.tl, 'GET', `/cases/${caseId}/history`);
+    expect(hist.body.data.map((h: any) => h.type)).toEqual([
+      'CREATED', 'EDITED', 'CALL_LENGTH', 'CALL_LENGTH', 'ACCEPTED', 'MODIFIED_AFTER_PROCESSING',
+    ]);
+    const last = hist.body.data[5];
+    expect(last).toMatchObject({ reason: 'Wrong zip code', before: { zipCode: '25000' }, after: { zipCode: '44000' }, actor: { id: w.admin.id } });
+    expect(hist.body.data[1]).toMatchObject({ reason: 'Typo', before: { lastName: 'Khan' }, after: { lastName: 'Ali' } });
+    // agent: no call-length entries; outsource (no customer:view): personal fields redacted
+    expect((await call(w.agent, 'GET', `/cases/${caseId}/history`)).body.data.map((h: any) => h.type)).not.toContain('CALL_LENGTH');
+    const osHist = await call(w.os1, 'GET', `/cases/${caseId}/history`);
+    expect(JSON.stringify(osHist.body.data)).not.toContain('12 Main Road');
+    expect(osHist.body.data[0].after).not.toHaveProperty('dateOfBirth');
+
+    // 9. Audit events
+    const mine = audit.entries.filter((e) => e.organizationId === w.orgId).map((e) => e.event);
+    for (const ev of ['CUSTOMER_CREATED', 'CASE_CREATED', 'CUSTOMER_UPDATED', 'CASE_UPDATED', 'CALL_LENGTH_UPDATED', 'CASE_ACCEPTED', 'CASE_MODIFIED']) {
+      expect(mine).toContain(ev);
+    }
+    const acc = audit.entries.find((e) => e.event === 'CASE_ACCEPTED' && e.entityId === caseId)!;
+    expect(acc).toMatchObject({ actorId: w.os1.id, organizationId: w.orgId, entityType: 'Case', before: { status: 'PENDING' }, after: { status: 'ACCEPTED' } });
+  });
+
+  // ---------------------------------------------------------------------------
+  it('reject: needs permission, confirm and reason; stores reason; visible to the agent', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/reject`, { reason: 'bad' }), 400, 'CONFIRMATION_REQUIRED');
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM' }), 400, 'VALIDATION_ERROR');
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM', reason: '   ' }), 400, 'VALIDATION_ERROR');
+    const r = await call(w.os1, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM', reason: 'Unreachable customer' });
+    expect(r.status).toBe(200);
+    expect(r.body.data).toMatchObject({ status: 'REJECTED', rejectionReason: 'Unreachable customer', processedBy: { id: w.os1.id } });
+    expect((await call(w.agent, 'GET', `/cases/${caseId}`)).body.data.rejectionReason).toBe('Unreachable customer');
+    const action = await prisma.acceptRejectAction.findUniqueOrThrow({ where: { caseId } });
+    expect(action).toMatchObject({ decision: 'REJECT', actorId: w.os1.id, reason: 'Unreachable customer' });
+    expect(audit.entries.some((e) => e.event === 'CASE_REJECTED' && e.entityId === caseId)).toBe(true);
+    // accepting a rejected case is also "already processed"
+    expectErr(await call(w.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' }), 409, 'CASE_ALREADY_PROCESSED');
+  });
+
+  it('modify-processed on a PENDING case is an invalid transition', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+    expectErr(
+      await call(w.admin, 'POST', `/cases/${caseId}/modify-processed`, { confirm: 'CONFIRM', reason: 'x', expectedVersion: 1, customer: { zipCode: '1234' } }),
+      409, 'INVALID_STATUS_TRANSITION',
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  it('team leader cannot accept or reject (default permissions); status stays PENDING', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+    expectErr(await call(w.tl, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' }), 403, 'FORBIDDEN');
+    expectErr(await call(w.tl, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM', reason: 'x' }), 403, 'FORBIDDEN');
+    expectErr(await call(w.agent, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' }), 403, 'FORBIDDEN');
+    expect((await prisma.case.findUniqueOrThrow({ where: { id: caseId } })).status).toBe('PENDING');
+    expect(await prisma.acceptRejectAction.count({ where: { caseId } })).toBe(0);
+  });
+
+  it('permissions: endpoints are denied without the required permission', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+    expectErr(await call(null, 'GET', `/cases/${caseId}`), 401, 'UNAUTHENTICATED');
+    expectErr(await call(w.tl, 'POST', '/customers', customerBody()), 403, 'FORBIDDEN'); // no customer:create
+    expectErr(await call(w.os1, 'POST', '/customers', customerBody()), 403, 'FORBIDDEN');
+    expectErr(await call(w.agent, 'PATCH', `/cases/${caseId}`, { customer: { lastName: 'X' }, expectedVersion: 1 }), 403, 'FORBIDDEN');
+    expectErr(await call(w.agent, 'PATCH', `/customers/${randomUUID()}`, { lastName: 'X' }), 403, 'FORBIDDEN');
+    expectErr(await call(w.agent, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 5 }), 403, 'FORBIDDEN'); // own case, no call_length perms
+    expectErr(await call(w.os1, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 5 }), 403, 'FORBIDDEN');
+    expectErr(await call(w.os1, 'GET', '/customers'), 403, 'FORBIDDEN'); // no customer:view
+    // call length create vs update permission are distinct
+    const onlyUpdate = { ...w.tl, permissions: w.tl.permissions.filter((p) => p !== 'call_length:create') };
+    expectErr(await call(onlyUpdate, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 5 }), 403, 'FORBIDDEN');
+    expect((await call(w.tl, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 5 })).status).toBe(200);
+    expect((await call(onlyUpdate, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 6 })).status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------------
+  it('agent isolation: an agent cannot see, list, search or touch another agent\'s records', async () => {
+    const w = await makeWorld();
+    const { caseId, customerId } = await newCase(w, w.agent);
+    const mine2 = await newCase(w, w.agent2);
+
+    expectErr(await call(w.agent2, 'GET', `/cases/${caseId}`), 404, 'NOT_FOUND');
+    expectErr(await call(w.agent2, 'GET', `/cases/${caseId}/history`), 404, 'NOT_FOUND');
+    expectErr(await call(w.agent2, 'GET', `/customers/${customerId}`), 404, 'NOT_FOUND');
+    expectErr(await call(w.agent2, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 5 }), 404, 'NOT_FOUND');
+
+    const l = await call(w.agent2, 'GET', '/cases');
+    expect(l.body.data.map((c: any) => c.id)).toEqual([mine2.caseId]);
+    expect(l.body.meta.total).toBe(1);
+    // forging the filter does not widen the scope
+    const forged = await call(w.agent2, 'GET', `/cases?agentId=${w.agent.id}`);
+    expect(forged.body.data).toEqual([]);
+    const cust = await call(w.agent2, 'GET', '/customers');
+    expect(cust.body.data.map((c: any) => c.id)).toEqual([mine2.customerId]);
+    // phone search cannot reveal the other agent's customer
+    const ph = (await prisma.customer.findUniqueOrThrow({ where: { id: customerId } })).phone;
+    expect((await call(w.agent2, 'GET', `/cases?phone=${encodeURIComponent(ph)}`)).body.data).toEqual([]);
+
+    // staff roles see both
+    expect((await call(w.tl, 'GET', '/cases')).body.meta.total).toBe(2);
+  });
+
+  it('tenant isolation: nothing crosses organizations, ids and phone numbers included', async () => {
+    const a = await makeWorld();
+    const b = await makeWorld();
+    const body = customerBody();
+    const { caseId, customerId } = await newCase(a, a.agent, body);
+
+    // organization B actors: all 404, nothing changes
+    expectErr(await call(b.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' }), 404, 'NOT_FOUND');
+    expectErr(await call(b.os1, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM', reason: 'x' }), 404, 'NOT_FOUND');
+    expectErr(await call(b.tl, 'GET', `/cases/${caseId}`), 404, 'NOT_FOUND');
+    expectErr(await call(b.tl, 'GET', `/cases/${caseId}/history`), 404, 'NOT_FOUND');
+    expectErr(await call(b.tl, 'PATCH', `/cases/${caseId}`, { customer: { lastName: 'X' }, expectedVersion: 1 }), 404, 'NOT_FOUND');
+    expectErr(await call(b.tl, 'PUT', `/cases/${caseId}/call-length`, { durationSeconds: 5 }), 404, 'NOT_FOUND');
+    expectErr(await call(b.tl, 'GET', `/customers/${customerId}`), 404, 'NOT_FOUND');
+    expectErr(await call(b.tl, 'PATCH', `/customers/${customerId}`, { lastName: 'X' }), 404, 'NOT_FOUND');
+    expectErr(await call(b.admin, 'POST', `/cases/${caseId}/modify-processed`, { confirm: 'CONFIRM', reason: 'x', expectedVersion: 1, customer: { zipCode: '9999' } }), 404, 'NOT_FOUND');
+    expect((await call(b.os1, 'GET', '/outsource/cases')).body.meta.total).toBe(0);
+    expect((await call(b.os1, 'GET', '/outsource/summary')).body.data.total).toBe(0);
+    expect((await call(b.tl, 'GET', `/cases?phone=${encodeURIComponent(body.phone)}`)).body.data).toEqual([]);
+    const row = await prisma.case.findUniqueOrThrow({ where: { id: caseId } });
+    expect(row).toMatchObject({ status: 'PENDING', version: 1 });
+
+    // the same phone number is allowed in another organization (unique per organization)
+    const dupOtherTenant = await call(b.agent, 'POST', '/customers', body);
+    expect(dupOtherTenant.status).toBe(201);
+    // an attacker-supplied organizationId in the body is rejected by strict validation, never used
+    expectErr(await call(b.agent, 'POST', '/customers', { ...customerBody(), organizationId: a.orgId }), 400, 'VALIDATION_ERROR');
+  });
+
+  // ---------------------------------------------------------------------------
+  it('phone uniqueness per organization, normalised (PHONE_ALREADY_EXISTS)', async () => {
+    const w = await makeWorld();
+    const base = '+923001234567';
+    expect((await call(w.agent, 'POST', '/customers', customerBody(base))).status).toBe(201);
+    expectErr(await call(w.agent, 'POST', '/customers', customerBody(base)), 409, 'PHONE_ALREADY_EXISTS');
+    expectErr(await call(w.agent2, 'POST', '/customers', customerBody('+92 300-123 4567')), 409, 'PHONE_ALREADY_EXISTS');
+    expectErr(await call(w.agent2, 'POST', '/customers', customerBody('+92 (300) 1234567')), 409, 'PHONE_ALREADY_EXISTS');
+
+    const other = await newCase(w, w.agent, customerBody('+923009999999'));
+    expectErr(await call(w.tl, 'PATCH', `/customers/${other.customerId}`, { phone: '+923001234567' }), 409, 'PHONE_ALREADY_EXISTS');
+    expectErr(await call(w.tl, 'PATCH', `/cases/${other.caseId}`, { customer: { phone: '+92-300-1234567' }, expectedVersion: 1 }), 409, 'PHONE_ALREADY_EXISTS');
+    expect((await prisma.case.findUniqueOrThrow({ where: { id: other.caseId } })).version).toBe(1); // rolled back
+  });
+
+  it('validation errors use the envelope, never echo values; malformed ids are 404', async () => {
+    const w = await makeWorld();
+    const bad = await call(w.agent, 'POST', '/customers', customerBody(phone(), { dateOfBirth: 'SECRET-DOB', zipCode: '<b>' }));
+    expectErr(bad, 400, 'VALIDATION_ERROR');
+    expect(JSON.stringify(bad.body)).not.toContain('SECRET-DOB');
+    expectErr(await call(w.agent, 'POST', '/customers', { firstName: 'x' }), 400, 'VALIDATION_ERROR');
+    expectErr(await call(w.agent, 'GET', '/cases/not-a-uuid'), 404, 'NOT_FOUND');
+    expectErr(await call(w.tl, 'PUT', `/cases/${randomUUID()}/call-length`, { durationSeconds: -1 }), 400, 'VALIDATION_ERROR');
+    expectErr(await call(w.tl, 'PUT', `/cases/${randomUUID()}/call-length`, { durationSeconds: 5 }), 404, 'NOT_FOUND');
+    expectErr(await call(w.tl, 'GET', '/cases?pageSize=101'), 400, 'VALIDATION_ERROR');
+    expectErr(await call(w.tl, 'GET', '/cases?sort=password:asc'), 400, 'VALIDATION_ERROR');
+    expectErr(await call(w.agent, 'GET', '/cases?minCallSeconds=1'), 403, 'FORBIDDEN');
+  });
+
+  // ---------------------------------------------------------------------------
+  it('CONCURRENCY: parallel accepts and rejects process a case exactly once', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+
+    const attempts = [
+      ...Array.from({ length: 10 }, () => call(w.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' })),
+      ...Array.from({ length: 10 }, () => call(w.os2, 'POST', `/cases/${caseId}/reject`, { confirm: 'CONFIRM', reason: 'race' })),
+    ];
+    const results = await Promise.all(attempts);
+
+    const ok = results.filter((r) => r.status === 200);
+    const lost = results.filter((r) => r.status !== 200);
+    expect(ok).toHaveLength(1);
+    expect(lost).toHaveLength(19);
+    for (const r of lost) expectErr(r, 409, 'CASE_ALREADY_PROCESSED');
+
+    const row = await prisma.case.findUniqueOrThrow({ where: { id: caseId } });
+    expect(row.version).toBe(2); // 1 (created) + exactly one decision
+    expect(row.status).toBe(ok[0].body.data.status);
+    expect(await prisma.acceptRejectAction.count({ where: { caseId } })).toBe(1);
+    expect(await prisma.workflowTransition.count({ where: { caseId, action: { in: ['ACCEPT', 'REJECT'] } } })).toBe(1);
+    expect(await prisma.caseRevision.count({ where: { caseId, type: { in: ['ACCEPTED', 'REJECTED'] } } })).toBe(1);
+    expect(audit.entries.filter((e) => e.entityId === caseId && (e.event === 'CASE_ACCEPTED' || e.event === 'CASE_REJECTED'))).toHaveLength(1);
+  });
+
+  it('CONCURRENCY: parallel creates of the same phone produce exactly one customer', async () => {
+    const w = await makeWorld();
+    const p = phone();
+    const results = await Promise.all(Array.from({ length: 8 }, () => call(w.agent, 'POST', '/customers', customerBody(p))));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+    for (const r of results.filter((x) => x.status !== 201)) expectErr(r, 409, 'PHONE_ALREADY_EXISTS');
+    expect(await prisma.customer.count({ where: { organizationId: w.orgId, phone: p } })).toBe(1);
+    expect(await prisma.case.count({ where: { organizationId: w.orgId } })).toBe(1);
+  });
+
+  it('CONCURRENCY: parallel edits with the same expectedVersion -> one wins, others VERSION_CONFLICT', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => call(w.tl, 'PATCH', `/cases/${caseId}`, { customer: { lastName: `Name${i}` }, expectedVersion: 1 })),
+    );
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    for (const r of results.filter((x) => x.status !== 200)) expectErr(r, 409, 'VERSION_CONFLICT');
+    expect((await prisma.case.findUniqueOrThrow({ where: { id: caseId } })).version).toBe(2);
+    expect(await prisma.caseRevision.count({ where: { caseId, type: 'EDITED' } })).toBe(1);
+  });
+
+  it('database backstop: a second decision row for the same case is impossible', async () => {
+    const w = await makeWorld();
+    const { caseId } = await newCase(w);
+    await call(w.os1, 'POST', `/cases/${caseId}/accept`, { confirm: 'CONFIRM' });
+    await expect(
+      prisma.acceptRejectAction.create({ data: { organizationId: w.orgId, caseId, decision: 'REJECT', actorId: w.os2.id } }),
+    ).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  // ---------------------------------------------------------------------------
+  it('lists: phone prefix, search, filters, sorting, pagination, call-length range', async () => {
+    const w = await makeWorld();
+    const mk = (n: number, first: string, last: string) => newCase(w, w.agent, customerBody(`+92300100000${n}`, { firstName: first, lastName: last }));
+    const c = [await mk(1, 'Zara', 'Ahmed'), await mk(2, 'Bilal', 'Shah'), await mk(3, 'Hina', 'Shah'), await mk(4, 'Omar', 'Raza'), await mk(5, 'Sana', 'Malik')];
+    await call(w.tl, 'PUT', `/cases/${c[0].caseId}/call-length`, { durationSeconds: 60 });
+    await call(w.tl, 'PUT', `/cases/${c[1].caseId}/call-length`, { durationSeconds: 300 });
+    await call(w.os1, 'POST', `/cases/${c[2].caseId}/accept`, { confirm: 'CONFIRM' });
+    await call(w.os1, 'POST', `/cases/${c[3].caseId}/reject`, { confirm: 'CONFIRM', reason: 'dup' });
+
+    const q = (qs: string) => call(w.os1, 'GET', `/outsource/cases?${qs}`);
+    const prefix = encodeURIComponent('+92300100000');
+
+    const p1 = await q(`phone=${prefix}&pageSize=2&sort=phone:asc`);
+    expect(p1.body.meta).toEqual({ page: 1, pageSize: 2, total: 5, totalPages: 3 });
+    expect(p1.body.data.map((x: any) => x.customer.phone)).toEqual(['+923001000001', '+923001000002']);
+    const p3 = await q(`phone=${prefix}&pageSize=2&page=3&sort=phone:asc`);
+    expect(p3.body.data.map((x: any) => x.customer.phone)).toEqual(['+923001000005']);
+    expect((await q(`phone=${prefix}&sort=phone:desc&pageSize=1`)).body.data[0].customer.phone).toBe('+923001000005');
+
+    expect((await q('phone=%2B9230010000003')).body.data).toHaveLength(0);
+    expect((await q('phone=%2B923001000003')).body.data).toHaveLength(1);
+    expect((await q('search=shah')).body.meta.total).toBe(2);
+    expect((await q('search=bilal%20shah')).body.meta.total).toBe(1);
+    expect((await q('search=0100000')).body.meta.total).toBe(5); // phone-looking text => phone contains
+    expect((await q('status=PENDING')).body.meta.total).toBe(3);
+    expect((await q('status=ACCEPTED')).body.meta.total).toBe(1);
+    expect((await q(`outsourceUserId=${w.os1.id}`)).body.meta.total).toBe(2);
+    expect((await q(`outsourceUserId=${w.os2.id}`)).body.meta.total).toBe(0);
+    expect((await q(`agentId=${w.agent.id}`)).body.meta.total).toBe(5);
+    expect((await q(`teamLeaderId=${w.tl.id}`)).body.meta.total).toBe(2);
+    expect((await q('minCallSeconds=100')).body.data.map((x: any) => x.callLengthSeconds)).toEqual([300]);
+    expect((await q('minCallSeconds=1&maxCallSeconds=100')).body.data.map((x: any) => x.callLengthSeconds)).toEqual([60]);
+    const today = new Date().toISOString().slice(0, 10);
+    expect((await q(`dateFrom=${today}&dateTo=${today}`)).body.meta.total).toBe(5);
+    expect((await q('dateFrom=2000-01-01&dateTo=2000-01-02')).body.meta.total).toBe(0);
+    expect((await q(`processedFrom=${today}&processedTo=${today}`)).body.meta.total).toBe(2);
+    expect((await q('sort=callLength:desc&pageSize=1')).body.data[0].callLengthSeconds).toBe(300);
+    // SUBMITTED is never visible to outsource, and the default listing hides nothing else
+    expect((await q('')).body.meta.total).toBe(5);
+
+    const tlList = await call(w.tl, 'GET', '/cases?status=REJECTED');
+    expect(tlList.body.data[0]).toMatchObject({ status: 'REJECTED', rejectionReason: 'dup' });
+  });
+
+  it('workflow.transitions exposes the transition table', async () => {
+    const w = await makeWorld();
+    const r = await call(w.tl, 'GET', '/workflow/transitions');
+    expect(r.status).toBe(200);
+    expect(r.body.data).toEqual(expect.arrayContaining([
+      { action: 'ACCEPT', from: 'PENDING', to: 'ACCEPTED', automatic: false, requiredPermission: 'case:accept', requiresConfirmation: true, requiresReason: false },
+      { action: 'REJECT', from: 'PENDING', to: 'REJECTED', automatic: false, requiredPermission: 'case:reject', requiresConfirmation: true, requiresReason: true },
+      { action: 'QUEUE', from: 'SUBMITTED', to: 'PENDING', automatic: true, requiredPermission: null, requiresConfirmation: false, requiresReason: false },
+    ]));
+    expectErr(await call(null, 'GET', '/workflow/transitions'), 401, 'UNAUTHENTICATED');
+  });
+
+  // ---------------------------------------------------------------------------
+  it('CaseQueryService: reporting aggregates agree with the API', async () => {
+    const w = await makeWorld();
+    const cs = [await newCase(w, w.agent), await newCase(w, w.agent), await newCase(w, w.agent2), await newCase(w, w.agent2)];
+    await call(w.tl, 'PUT', `/cases/${cs[0].caseId}/call-length`, { durationSeconds: 100 });
+    await call(w.tl, 'PUT', `/cases/${cs[1].caseId}/call-length`, { durationSeconds: 200 });
+    await call(w.tl, 'PUT', `/cases/${cs[2].caseId}/call-length`, { durationSeconds: 300 });
+    await call(w.tl, 'PATCH', `/cases/${cs[3].caseId}`, { customer: { zipCode: '55555' }, expectedVersion: 1 });
+    await call(w.os1, 'POST', `/cases/${cs[0].caseId}/accept`, { confirm: 'CONFIRM' });
+    await call(w.os1, 'POST', `/cases/${cs[1].caseId}/reject`, { confirm: 'CONFIRM', reason: 'x' });
+    await call(w.admin, 'POST', `/cases/${cs[0].caseId}/modify-processed`, { confirm: 'CONFIRM', reason: 'fix', expectedVersion: 3, customer: { zipCode: '66666' } });
+
+    const q = app.get(CaseQueryService);
+    const f = { organizationId: w.orgId };
+
+    expect(await q.countsByStatus(f)).toEqual({ SUBMITTED: 0, PENDING: 2, ACCEPTED: 1, REJECTED: 1, total: 4 });
+    expect(await q.countsByStatus({ ...f, agentId: w.agent.id })).toMatchObject({ ACCEPTED: 1, REJECTED: 1, PENDING: 0, total: 2 });
+    expect(await q.countsByStatus({ organizationId: randomUUID() })).toMatchObject({ total: 0 });
+
+    const byAgent = await q.countsByAgent(f);
+    expect(byAgent).toHaveLength(2);
+    expect(byAgent.find((a) => a.agentId === w.agent.id)).toEqual({ agentId: w.agent.id, agentName: 'Agent One', total: 2, accepted: 1, rejected: 1, pending: 0 });
+    expect(byAgent.find((a) => a.agentId === w.agent2.id)).toMatchObject({ total: 2, pending: 2 });
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(await q.countsByDate(f)).toEqual([{ date: today, total: 4, accepted: 1, rejected: 1, pending: 2 }]);
+
+    expect(await q.callLengthStats(f)).toEqual({ totalSeconds: 600, averageSeconds: 200, minSeconds: 100, maxSeconds: 300 });
+    expect(await q.callLengthStats({ ...f, minCallSeconds: 150 })).toMatchObject({ totalSeconds: 500, minSeconds: 200 });
+    expect(await q.callLengthStats({ organizationId: randomUUID() })).toEqual({ totalSeconds: 0, averageSeconds: 0, minSeconds: 0, maxSeconds: 0 });
+    const byAgentLen = await q.callLengthByAgent(f);
+    expect(byAgentLen.find((a) => a.agentId === w.agent.id)).toMatchObject({ averageCallSeconds: 150 });
+
+    expect(await q.reviewStats(f)).toEqual({ reviewedRecords: 4, modifiedRecords: 1 });
+
+    const perfAgents = await q.performanceByUser('AGENT', f);
+    expect(perfAgents.map((p) => p.userId).sort()).toEqual([w.agent.id, w.agent2.id].sort());
+    expect(perfAgents.find((p) => p.userId === w.agent.id)).toMatchObject({ fullName: 'Agent One', totalRecords: 2, accepted: 1, rejected: 1, averageCallSeconds: 150 });
+    expect(await q.performanceByUser('TEAM_LEADER', f)).toEqual([
+      { userId: w.tl.id, fullName: 'Lead One', totalRecords: 4, accepted: 1, rejected: 1, pending: 2, averageCallSeconds: 200 },
+    ]);
+    expect(await q.performanceByUser('OUTSOURCE', f)).toEqual([
+      { userId: w.os1.id, fullName: 'Outsource One', totalRecords: 2, accepted: 1, rejected: 1, pending: 0, averageCallSeconds: 150 },
+    ]);
+
+    // service == endpoint
+    const summary = await call(w.os1, 'GET', '/outsource/summary');
+    expect(summary.body.data).toEqual(await q.outsourceSummary(f));
+    expect(summary.body.data).toEqual({ total: 4, accepted: 1, rejected: 1, pending: 2, remaining: 2, processingRate: 50, acceptanceRate: 50, rejectionRate: 50 });
+    expectErr(await call(w.agent, 'GET', '/outsource/summary'), 403, 'FORBIDDEN'); // agents have no report:view
+  });
+});

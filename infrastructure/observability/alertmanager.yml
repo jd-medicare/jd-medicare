@@ -1,0 +1,16 @@
+# Replace receivers with real destinations. Use secret files / env substitution at deploy time; do NOT commit real keys.
+route:
+  receiver: ticket
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - { matchers: ['severity="page"'], receiver: pager, repeat_interval: 1h }
+receivers:
+  - name: pager
+    webhook_configs: [{ url: "https://SET_ME-pager-webhook.example.com/alerts", send_resolved: true }]
+  - name: ticket
+    webhook_configs: [{ url: "https://SET_ME-ticket-webhook.example.com/alerts", send_resolved: true }]
+inhibit_rules:
+  - { source_matchers: ['alertname="ApiDown"'], target_matchers: ['alertname=~"High5xxRate|HighLatencyP95"'], equal: [] }

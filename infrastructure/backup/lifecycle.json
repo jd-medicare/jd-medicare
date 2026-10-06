@@ -1,0 +1,7 @@
+{
+  "Rules": [
+    { "ID": "daily-35d",   "Status": "Enabled", "Filter": { "Prefix": "postgres/daily/" },   "Expiration": { "Days": 35 },  "NoncurrentVersionExpiration": { "NoncurrentDays": 7 }, "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 2 } },
+    { "ID": "weekly-12w",  "Status": "Enabled", "Filter": { "Prefix": "postgres/weekly/" },  "Expiration": { "Days": 84 },  "NoncurrentVersionExpiration": { "NoncurrentDays": 7 } },
+    { "ID": "monthly-12m", "Status": "Enabled", "Filter": { "Prefix": "postgres/monthly/" }, "Expiration": { "Days": 365 }, "NoncurrentVersionExpiration": { "NoncurrentDays": 7 } }
+  ]
+}

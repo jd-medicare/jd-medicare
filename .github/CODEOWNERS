@@ -1,0 +1,8 @@
+# Replace @org/... with real teams. Security-sensitive paths need review from the owning team.
+/infrastructure/ @org/devops
+/.github/        @org/devops
+/scripts/        @org/devops
+/tests/          @org/qa
+/apps/api/src/auth/ @org/security
+/apps/api/src/permissions/ @org/security
+/prisma/         @org/backend

@@ -1,0 +1,213 @@
+// Account 1 base schema. Other accounts add fragments under prisma/fragments/*.prisma;
+// the real initial migration is created at merge.
+generator client {
+  provider     = "prisma-client"
+  output       = "../apps/api/src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  LOCKED
+  SUSPENDED
+  DISABLED
+}
+
+model Organization {
+  id             String          @id @default(uuid()) @db.Uuid
+  name           String
+  slug           String          @unique
+  baseCurrency   String          @default("PKR") @db.VarChar(3)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
+  users          User[]
+  auditLogs      AuditLog[]
+  securityEvents SecurityEvent[]
+  settings       SystemSetting[]
+
+  @@map("organizations")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique
+  name        String
+  users       User[]
+  permissions RolePermission[]
+  menus       RoleMenu[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique
+  description String
+  roles       RolePermission[]
+  users       UserPermission[]
+
+  @@map("permissions")
+}
+
+model Menu {
+  id    String     @id @default(uuid()) @db.Uuid
+  key   String     @unique
+  roles RoleMenu[]
+  users UserMenu[]
+
+  @@map("menus")
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model RoleMenu {
+  roleId String @db.Uuid
+  menuId String @db.Uuid
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menu   Menu   @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, menuId])
+  @@map("role_menus")
+}
+
+model User {
+  id                  String     @id @default(uuid()) @db.Uuid
+  organizationId      String     @db.Uuid
+  email               String     @unique
+  fullName            String
+  phone               String?
+  passwordHash        String
+  status              UserStatus @default(INVITED)
+  roleId              String     @db.Uuid
+  isPrimarySuperAdmin Boolean    @default(false)
+  menusCustomized     Boolean    @default(false)
+  mfaEnabled          Boolean    @default(false)
+  mfaSecretEnc        String?
+  failedLoginCount    Int        @default(0)
+  lockedUntil         DateTime?  @db.Timestamptz(3)
+  lastLoginAt         DateTime?  @db.Timestamptz(3)
+  passwordChangedAt   DateTime?  @db.Timestamptz(3)
+  createdAt           DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime   @updatedAt @db.Timestamptz(3)
+
+  organization Organization       @relation(fields: [organizationId], references: [id])
+  role         Role               @relation(fields: [roleId], references: [id])
+  profile      UserProfile?
+  permissions  UserPermission[]
+  menus        UserMenu[]
+  resetTokens  PasswordResetToken[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, roleId])
+  @@map("users")
+}
+
+model UserProfile {
+  userId   String  @id @db.Uuid
+  jobTitle String?
+  timezone String  @default("UTC")
+  locale   String  @default("en")
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+/// Extra permissions granted to a user on top of the role defaults.
+model UserPermission {
+  userId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permissionId])
+  @@map("user_permissions")
+}
+
+/// Menu override rows; only effective when User.menusCustomized = true.
+model UserMenu {
+  userId String @db.Uuid
+  menuId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  menu   Menu   @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@id([userId, menuId])
+  @@map("user_menus")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz(3)
+  usedAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+/// Append-only (enforced by trigger). isProtected rows are only visible to the Primary Super Admin.
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  event          String
+  actorId        String?      @db.Uuid
+  entityType     String
+  entityId       String
+  requestId      String?
+  before         Json?
+  after          Json?
+  isProtected    Boolean      @default(false)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, event])
+  @@index([organizationId, entityType, entityId])
+  @@map("audit_logs")
+}
+
+/// Append-only security telemetry (failed logins, password resets, status changes without an audit event name).
+model SecurityEvent {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String?       @db.Uuid
+  userId         String?       @db.Uuid
+  type           String
+  ip             String?
+  userAgent      String?
+  requestId      String?
+  metadata       Json?
+  isProtected    Boolean       @default(false)
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
+  @@map("security_events")
+}
+
+model SystemSetting {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  key            String
+  value          Json
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, key])
+  @@map("system_settings")
+}

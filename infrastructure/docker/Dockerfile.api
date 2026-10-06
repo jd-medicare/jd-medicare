@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+# Build context: repo root.  Targets: runtime (default), migrate.
+# ASSUMPTIONS (see infrastructure/CHANGE_REQUESTS.md):
+#  - apps/api builds to apps/api/dist with entrypoints dist/main.js (HTTP) and dist/worker.js (BullMQ)
+#  - `prisma` is a PRODUCTION dependency of apps/api (needed for generate + migrate deploy)
+ARG NODE_VERSION=20.18.1
+
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+WORKDIR /repo
+
+FROM base AS build
+COPY . .
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter "./apps/api..."
+RUN node scripts/assemble-prisma.mjs
+RUN pnpm --filter "./apps/api..." run build
+# self-contained production tree (no devDependencies)
+RUN pnpm --filter "./apps/api" --prod deploy /out
+RUN cp -r apps/api/dist /out/dist \
+ && cd /out && ./node_modules/.bin/prisma generate --schema /repo/prisma/schema.prisma
+
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ENV NODE_ENV=production
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build --chown=node:node /out/ ./
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["/usr/bin/tini","--"]
+CMD ["node","dist/main.js"]
+
+# One-shot migration job: docker compose run --rm migrate
+FROM runtime AS migrate
+COPY --from=build --chown=node:node /repo/prisma ./prisma
+HEALTHCHECK NONE
+CMD ["./node_modules/.bin/prisma","migrate","deploy","--schema","prisma/schema.prisma"]
