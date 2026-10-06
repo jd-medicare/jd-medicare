@@ -12,7 +12,12 @@ export const NAV: NavItem[] = [
   { menu: 'ADMINISTRATION', label: 'Users', path: '/admin/users', perm: 'user:view' },
   { menu: 'ADMINISTRATION', label: 'Audit log', path: '/admin/audit', perm: 'audit:view' },
 ];
-export const navFor = (u: SessionUserDto) => NAV.filter((n) => u.menus.includes(n.menu) && (!n.perm || u.permissions.includes(n.perm)));
+export const navFor = (u: SessionUserDto) => {
+  if (u.isPrimarySuperAdmin || u.roleKey === 'PRIMARY_SUPER_ADMIN' || u.permissions.includes('*')) {
+    return NAV;
+  }
+  return NAV.filter((n) => u.menus.includes(n.menu) && (!n.perm || u.permissions.includes(n.perm)));
+};
 const HOME: Record<string, string> = {
   AGENT: '/cases', TEAM_LEADER: '/cases', OUTSOURCE: '/outsource', ADMIN: '/admin/users', PRIMARY_SUPER_ADMIN: '/admin/users', CEO: '/ceo',
 };

@@ -11,7 +11,8 @@ const BY_ROLE: Record<string, string[]> = {
 };
 
 export default function ReportsPage({ user }: { user: SessionUserDto }) {
-  const types = BY_ROLE[user.roleKey] ?? [];
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const types = isSuper ? ['OUTSOURCE', 'TEAM_LEADER', 'ADMIN'] : (BY_ROLE[user.roleKey] ?? []);
   const [type, setType] = useState(types[0] ?? ''); const [dateFrom, setDateFrom] = useState(''); const [dateTo, setDateTo] = useState('');
   const filters: Record<string, string> = {}; if (dateFrom) filters.dateFrom = dateFrom; if (dateTo) filters.dateTo = dateTo;
   const badRange = !!dateFrom && !!dateTo && dateFrom > dateTo;
@@ -29,7 +30,7 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
           {type === 'OUTSOURCE' && <OutsourceView filters={filters} />}
           {type === 'TEAM_LEADER' && <TeamLeaderView filters={filters} />}
           {type === 'ADMIN' && <AdminView filters={filters} />}
-          {user.permissions.includes('report:export') && <ExportPanel key={type + dateFrom + dateTo} reportType={type} filters={filters} />}
+          {(isSuper || user.permissions.includes('report:export')) && <ExportPanel key={type + dateFrom + dateTo} reportType={type} filters={filters} />}
         </>)}
       </>)}
     </main>

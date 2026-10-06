@@ -14,7 +14,8 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
   const dPhone = useDebounced(phone);
   const list = useQuery({ queryKey: ['cases', page, dPhone, status, dateFrom, dateTo, sort], queryFn: () => caseService.list({ page, pageSize: 25, phone: dPhone, status, dateFrom, dateTo, sort }) });
   const rows = list.data?.data ?? []; const own = user.roleKey === 'AGENT'; const reset = (fn: () => void) => { fn(); setPage(1); };
-  const showCall = user.permissions.includes('call_length:view');
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const showCall = isSuper || user.permissions.includes('call_length:view');
   const cols = 5 + (own ? 0 : 1) + (showCall ? 1 : 0);
   return (
     <main style={pageStyle}>

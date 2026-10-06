@@ -13,7 +13,8 @@ export default function UsersPage({ user }: { user: SessionUserDto }) {
   const [page, setPage] = useState(1); const [status, setStatus] = useState(''); const [creating, setCreating] = useState(false);
   const [perm, setPerm] = useState<UserDto | null>(null); const [lock, setLock] = useState<{ u: UserDto; kind: 'lock' | 'unlock' } | null>(null);
   const list = useQuery({ queryKey: ['users', page, status], queryFn: () => adminService.users({ page, pageSize: 25, status }) });
-  const rows = list.data?.data ?? []; const has = (p: string) => user.permissions.includes(p);
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const rows = list.data?.data ?? []; const has = (p: string) => isSuper || user.permissions.includes(p);
   return (
     <main style={pageStyle}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>

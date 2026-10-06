@@ -25,7 +25,8 @@ function Guard({ menu, perm, children }: { menu?: string; perm?: string; childre
   const { data: user, isLoading, isError } = useSession();
   if (isLoading) return <Skeleton />;
   if (isError || !user) return <Navigate to="/login" replace />;
-  const denied = (menu && !user.menus.includes(menu)) || (perm && !user.permissions.includes(perm));
+  const isSuper = user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*');
+  const denied = !isSuper && ((menu && !user.menus.includes(menu)) || (perm && !user.permissions.includes(perm)));
   return <AppShell user={user}>{denied ? <p role="alert" style={{ padding: 24 }}>You do not have access to this page.</p> : children(user)}</AppShell>;
 }
 /** Gate taken from the nav table so a route and its nav link can never disagree. */

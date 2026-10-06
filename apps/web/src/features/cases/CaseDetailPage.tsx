@@ -11,7 +11,8 @@ export default function CaseDetailPage({ user }: { user: SessionUserDto }) {
   const id = useParams().id ?? '';
   const q = useQuery({ queryKey: ['case', id], queryFn: () => caseService.get(id), enabled: !!id });
   const c = q.data?.data;
-  const canSet = user.permissions.includes('call_length:create') || user.permissions.includes('call_length:update');
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const canSet = isSuper || user.permissions.includes('call_length:create') || user.permissions.includes('call_length:update');
   return (
     <main style={pageStyle}>
       <p style={{ margin: 0 }}><Link to="/cases">Back to cases</Link></p>

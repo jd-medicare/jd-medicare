@@ -47,6 +47,7 @@ export const authService = {
       permissions: rawUser.permissions || [],
       menus: rawUser.menus || [],
       mfaEnabled: Boolean(rawUser.mfaEnabled),
+      isPrimarySuperAdmin: Boolean(rawUser.isPrimarySuperAdmin),
     };
     return { data: mapped };
   },

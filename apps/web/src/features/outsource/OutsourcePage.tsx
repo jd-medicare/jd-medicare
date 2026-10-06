@@ -14,7 +14,8 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ['outsource', page, dPhone, status, sort], queryFn: () => outsourceService.cases({ page, pageSize: 25, phone: dPhone, status, sort }) });
   const summary = useQuery({ queryKey: ['outsource-summary'], queryFn: () => outsourceService.summary() });
-  const canProcess = user.permissions.includes('case:accept');
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const canProcess = isSuper || user.permissions.includes('case:accept');
   const toggleSort = (f: string) => setSort(sort === `${f}:asc` ? `${f}:desc` : `${f}:asc`);
   const rows = list.data?.data ?? []; const meta = list.data?.meta; const s = summary.data?.data;
   const cols = canProcess ? 6 : 5;

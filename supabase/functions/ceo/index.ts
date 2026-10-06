@@ -20,35 +20,149 @@ Deno.serve(async (req: Request) => {
 
   // GET /dashboard
   if (req.method === 'GET' && (pathname === '/dashboard' || pathname === '/')) {
+    const qRange = url.searchParams.get('range') || 'THIS_MONTH';
+    const qFrom = url.searchParams.get('dateFrom');
+    const qTo = url.searchParams.get('dateTo');
+
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().substring(0, 10);
+    const today = now.toISOString().substring(0, 10);
+
+    const dateFrom = qFrom || firstDay;
+    const dateTo = qTo || today;
+
+    // Fetch cases
     const { data: cases } = await client
       .from('cases')
-      .select('status, agentId, teamLeaderId, processedById')
+      .select('id, status, submittedAt, agentId, teamLeaderId, processedById, callRecord:call_records(durationSeconds)')
       .eq('organizationId', user.organizationId);
 
+    // Fetch incomes
     const { data: incomes } = await client
       .from('incomes')
-      .select('amount')
+      .select('amount, date')
       .eq('organizationId', user.organizationId)
       .eq('status', 'ACTIVE');
 
+    // Fetch expenses
     const { data: expenses } = await client
       .from('expenses')
-      .select('amount')
+      .select('amount, date')
       .eq('organizationId', user.organizationId)
       .eq('status', 'ACTIVE');
 
-    const totalCases = cases?.length || 0;
-    const acceptedCases = cases?.filter((c: any) => c.status === 'ACCEPTED').length || 0;
-    const totalIncome = (incomes || []).reduce((acc: number, cur: any) => acc + Number(cur.amount), 0);
-    const totalExpense = (expenses || []).reduce((acc: number, cur: any) => acc + Number(cur.amount), 0);
+    // Fetch users for headcount
+    const { data: users } = await client
+      .from('users')
+      .select('id, status, roles:roleId(key)')
+      .eq('organizationId', user.organizationId)
+      .eq('status', 'ACTIVE');
+
+    const totalRecords = cases?.length || 0;
+    const accepted = cases?.filter((c: any) => c.status === 'ACCEPTED').length || 0;
+    const rejected = cases?.filter((c: any) => c.status === 'REJECTED').length || 0;
+    const pending = cases?.filter((c: any) => c.status === 'PENDING' || c.status === 'SUBMITTED').length || 0;
+    const newRecords = totalRecords;
+    const processed = accepted + rejected;
+    const processingRate = totalRecords > 0 ? Math.round((processed / totalRecords) * 100) : 0;
+    const acceptanceRate = processed > 0 ? Math.round((accepted / processed) * 100) : 0;
+    const rejectionRate = processed > 0 ? Math.round((rejected / processed) * 100) : 0;
+
+    // Active people by role
+    let activeAgents = 0;
+    let activeTeamLeaders = 0;
+    let activeOutsourceUsers = 0;
+    for (const u of users || []) {
+      const rk = (u.roles as any)?.key;
+      if (rk === 'AGENT') activeAgents++;
+      else if (rk === 'TEAM_LEADER') activeTeamLeaders++;
+      else if (rk === 'OUTSOURCE') activeOutsourceUsers++;
+    }
+
+    // Call length
+    const durations = (cases || []).map((c: any) => c.callRecord?.durationSeconds || 0);
+    const totalSeconds = durations.reduce((a: number, b: number) => a + b, 0);
+    const averageSeconds = totalRecords > 0 ? Math.round(totalSeconds / totalRecords) : 0;
+    const minSeconds = durations.length > 0 ? Math.min(...durations) : 0;
+    const maxSeconds = durations.length > 0 ? Math.max(...durations) : 0;
+
+    // Finance sums
+    const totalIncomeNum = (incomes || []).reduce((acc: number, cur: any) => acc + Number(cur.amount), 0);
+    const totalExpenseNum = (expenses || []).reduce((acc: number, cur: any) => acc + Number(cur.amount), 0);
+    const netPositionNum = totalIncomeNum - totalExpenseNum;
+
+    // Trends: Records by date
+    const dateBuckets: Record<string, { date: string; total: number; accepted: number; rejected: number; pending: number }> = {};
+    for (const c of cases || []) {
+      const d = c.submittedAt ? c.submittedAt.substring(0, 10) : today;
+      if (!dateBuckets[d]) {
+        dateBuckets[d] = { date: d, total: 0, accepted: 0, rejected: 0, pending: 0 };
+      }
+      dateBuckets[d].total += 1;
+      if (c.status === 'ACCEPTED') dateBuckets[d].accepted += 1;
+      else if (c.status === 'REJECTED') dateBuckets[d].rejected += 1;
+      else dateBuckets[d].pending += 1;
+    }
+
+    // Trends: Income vs expense by month
+    const monthBuckets: Record<string, { month: string; income: number; expenses: number }> = {};
+    for (const inc of incomes || []) {
+      const m = inc.date ? inc.date.substring(0, 7) : today.substring(0, 7);
+      if (!monthBuckets[m]) monthBuckets[m] = { month: m, income: 0, expenses: 0 };
+      monthBuckets[m].income += Number(inc.amount);
+    }
+    for (const exp of expenses || []) {
+      const m = exp.date ? exp.date.substring(0, 7) : today.substring(0, 7);
+      if (!monthBuckets[m]) monthBuckets[m] = { month: m, income: 0, expenses: 0 };
+      monthBuckets[m].expenses += Number(exp.amount);
+    }
+
+    const recordsByDate = Object.values(dateBuckets).sort((a, b) => b.date.localeCompare(a.date));
+    const incomeVsExpenseByMonth = Object.values(monthBuckets)
+      .sort((a, b) => b.month.localeCompare(a.month))
+      .map((m) => ({
+        month: m.month,
+        income: String(m.income),
+        expenses: String(m.expenses),
+      }));
 
     return jsonResponse({
       data: {
-        totalCases,
-        acceptedCases,
-        totalIncome,
-        totalExpense,
-        netProfit: totalIncome - totalExpense,
+        range: {
+          dateFrom,
+          dateTo,
+        },
+        operations: {
+          totalRecords,
+          newRecords,
+          pending,
+          accepted,
+          rejected,
+          processingRate,
+          acceptanceRate,
+          rejectionRate,
+        },
+        people: {
+          activeAgents,
+          activeTeamLeaders,
+          activeOutsourceUsers,
+        },
+        callLength: {
+          totalSeconds,
+          averageSeconds,
+          minSeconds,
+          maxSeconds,
+        },
+        finance: {
+          totalIncome: String(totalIncomeNum),
+          totalExpenses: String(totalExpenseNum),
+          netPosition: String(netPositionNum),
+          currency: 'PKR',
+        },
+        trends: {
+          recordsByDate,
+          incomeVsExpenseByMonth,
+        },
       },
     });
   }

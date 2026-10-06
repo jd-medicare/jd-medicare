@@ -17,6 +17,7 @@ export type CaseDto = z.infer<typeof CaseDto>;
 export const SessionUserDto = z.object({
   id: z.string(), email: z.string(), fullName: z.string(), organizationId: z.string(), roleKey: z.string(),
   permissions: z.array(z.string()), menus: z.array(z.string()), mfaEnabled: z.boolean(),
+  isPrimarySuperAdmin: z.boolean().optional(),
 });
 export type SessionUserDto = z.infer<typeof SessionUserDto>;
 export const LoginResult = z.object({ user: SessionUserDto.nullable(), mfaRequired: z.boolean() });
