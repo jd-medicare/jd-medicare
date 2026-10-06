@@ -91,7 +91,9 @@ Deno.serve(async (req: Request) => {
 
     // Fetch menus for user role or user override
     let menus: string[] = [];
-    if (auth.user.menusCustomized) {
+    if (auth.user.isPrimarySuperAdmin || auth.user.roleKey === 'PRIMARY_SUPER_ADMIN') {
+      menus = ['DASHBOARD', 'CUSTOMERS', 'CASES', 'OUTSOURCE', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO', 'ADMINISTRATION'];
+    } else if (auth.user.menusCustomized) {
       const { data: userMenus } = await client
         .from('user_menus')
         .select('menus:menuId(key)')

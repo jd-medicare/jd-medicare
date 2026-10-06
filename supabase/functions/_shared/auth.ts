@@ -96,9 +96,22 @@ export async function requireAuth(req: Request): Promise<AuthResult> {
   const roleKey = (dbUser.roles as any)?.key || '';
   const permissionsSet = new Set<string>();
 
+  const ALL_PERMISSIONS = [
+    'user:create', 'user:view', 'user:update', 'user:lock', 'user:unlock',
+    'role:manage', 'permission:manage', 'menu:manage',
+    'customer:create', 'customer:view', 'customer:update',
+    'case:create', 'case:view', 'case:update', 'case:accept', 'case:reject', 'case:modify_processed',
+    'call_length:view', 'call_length:create', 'call_length:update',
+    'report:view', 'report:export',
+    'finance:view', 'income:create', 'income:update', 'expense:create', 'expense:update',
+    'expense_head:create', 'expense_head:update',
+    'ceo:dashboard', 'audit:view',
+  ];
+
   if (dbUser.isPrimarySuperAdmin || roleKey === 'PRIMARY_SUPER_ADMIN') {
-    // Primary super admin has all permissions
+    // Primary super admin has all permissions and full wildcard access
     permissionsSet.add('*');
+    for (const p of ALL_PERMISSIONS) permissionsSet.add(p);
   } else {
     // Load role permissions
     const { data: rolePerms } = await client
