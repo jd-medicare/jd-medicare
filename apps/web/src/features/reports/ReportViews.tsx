@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { reportService } from '../../services/reports';
 import { errorMessage } from '../../services/api-client';
 import { Kpis, Loading, StatusBadge } from '../../design-system';
-import { fmtSeconds } from '../../lib/format';
+import { calculateAge, fmtSeconds, getCustomerSsnMbi, getCustomerState } from '../../lib/format';
 import type { ListQuery } from '../../services/types';
 import { formatCallSeconds, getUnifiedCases } from '../../services/caseSync';
 import type { CaseDto } from '../../schemas';
@@ -43,6 +43,76 @@ function Table({ caption, head, rows }: { caption: string; head: string[]; rows:
   );
 }
 
+function CustomerRecordsTable({
+  caption,
+  cases,
+  showCall = false,
+}: {
+  caption: string;
+  cases: CaseDto[];
+  showCall?: boolean;
+}) {
+  return (
+    <div className="card" style={{ padding: '18px 22px', borderRadius: 14, border: '1px solid var(--border)', marginTop: 16 }}>
+      <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 700 }}>
+        {caption} ({cases.length})
+      </h3>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">CUSTOMER</th>
+              <th scope="col">PHONE</th>
+              <th scope="col">AGE</th>
+              <th scope="col">STATE</th>
+              <th scope="col">ZIP CODE</th>
+              <th scope="col">SSN | MBI</th>
+              <th scope="col">AGENT / USER</th>
+              <th scope="col">SUBMITTED</th>
+              {showCall && <th scope="col">CALL LENGTH</th>}
+              <th scope="col">STATUS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cases.length === 0 ? (
+              <tr>
+                <td colSpan={showCall ? 10 : 9} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: '24px 12px' }}>
+                  No customer records match these filters.
+                </td>
+              </tr>
+            ) : (
+              cases.map((c) => {
+                const custName = c.customer ? `${c.customer.firstName || ''} ${c.customer.lastName || ''}`.trim() : 'Customer';
+                const callLen = c.callLengthDisplay || (c.callLengthSeconds ? formatCallSeconds(c.callLengthSeconds) : '—');
+                return (
+                  <tr key={c.id}>
+                    <td>
+                      <Link to={`/cases/${c.id}`} style={{ fontWeight: 600, color: 'var(--primary)' }}>
+                        {custName}
+                      </Link>
+                    </td>
+                    <td>{c.customer?.phone || '—'}</td>
+                    <td>{calculateAge(c.customer?.dateOfBirth, (c.customer?.extra as any)?.age)}</td>
+                    <td>{getCustomerState(c.customer)}</td>
+                    <td>{c.customer?.zipCode || '—'}</td>
+                    <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{getCustomerSsnMbi(c.customer)}</td>
+                    <td>{c.agent?.fullName || 'Intake Agent'}</td>
+                    <td style={{ fontSize: 13, color: 'var(--muted, #94a3b8)' }}>{c.submittedAt ? new Date(c.submittedAt).toLocaleDateString() : '—'}</td>
+                    {showCall && <td style={{ fontSize: 13 }}>{callLen}</td>}
+                    <td>
+                      <StatusBadge status={c.status} />
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function State({ q, children }: { q: { isLoading: boolean; isError: boolean; error: unknown }; children: ReactNode }) {
   if (q.isLoading) return <Loading />;
   if (q.isError) return <p className="err" role="alert">{errorMessage(q.error)}</p>;
@@ -53,6 +123,11 @@ export function OutsourceView({ filters }: { filters: ListQuery & { user?: strin
   const q = useQuery({
     queryKey: ['report', 'OUTSOURCE', filters],
     queryFn: () => reportService.outsource(filters),
+    refetchInterval: 3000,
+  });
+  const casesQ = useQuery({
+    queryKey: ['report', 'OUTSOURCE_CASES'],
+    queryFn: () => getUnifiedCases(),
     refetchInterval: 3000,
   });
   const rawSummary = q.data?.data.summary;
@@ -99,6 +174,16 @@ export function OutsourceView({ filters }: { filters: ListQuery & { user?: strin
       })()
     : null;
 
+  let matchingCases = casesQ.data ?? [];
+  if (filters.user) {
+    const filterUserLower = String(filters.user).toLowerCase().trim();
+    matchingCases = matchingCases.filter(
+      (c) =>
+        (c.agent?.fullName || '').toLowerCase().includes(filterUserLower) ||
+        (c.agent?.id || '').toLowerCase() === filterUserLower
+    );
+  }
+
   return (
     <State q={q}>
       {s && (
@@ -125,6 +210,7 @@ export function OutsourceView({ filters }: { filters: ListQuery & { user?: strin
             head={['Date', 'Total', 'Accepted', 'Rejected', 'Pending']}
             rows={s.byDate.map((a) => [a.date, a.total, a.accepted, a.rejected, a.pending])}
           />
+          <CustomerRecordsTable caption="Outsource customer records" cases={matchingCases} />
         </>
       )}
     </State>
@@ -132,13 +218,29 @@ export function OutsourceView({ filters }: { filters: ListQuery & { user?: strin
 }
 
 /** The "team performance" table for team leaders is the byAgent block of this report. */
-export function TeamLeaderView({ filters }: { filters: ListQuery }) {
+export function TeamLeaderView({ filters }: { filters: ListQuery & { user?: string } }) {
   const q = useQuery({
     queryKey: ['report', 'TEAM_LEADER', filters],
     queryFn: () => reportService.teamLeader(filters),
     refetchInterval: 3000,
   });
+  const casesQ = useQuery({
+    queryKey: ['report', 'TL_CASES'],
+    queryFn: () => getUnifiedCases(),
+    refetchInterval: 3000,
+  });
   const s = q.data?.data.summary;
+
+  let matchingCases = casesQ.data ?? [];
+  if (filters.user) {
+    const filterUserLower = String(filters.user).toLowerCase().trim();
+    matchingCases = matchingCases.filter(
+      (c) =>
+        (c.agent?.fullName || '').toLowerCase().includes(filterUserLower) ||
+        (c.agent?.id || '').toLowerCase() === filterUserLower
+    );
+  }
+
   return (
     <State q={q}>
       {s && (
@@ -160,6 +262,7 @@ export function TeamLeaderView({ filters }: { filters: ListQuery }) {
             head={['Agent', 'Records', 'Average call length']}
             rows={s.byAgent.map((a) => [a.agentName, a.total, fmtSeconds(a.averageCallSeconds)])}
           />
+          <CustomerRecordsTable caption="Team customer records" cases={matchingCases} showCall />
         </>
       )}
     </State>
@@ -172,7 +275,14 @@ export function AdminView({ filters }: { filters: ListQuery }) {
     queryFn: () => reportService.admin(filters),
     refetchInterval: 3000,
   });
+  const casesQ = useQuery({
+    queryKey: ['report', 'ADMIN_CASES'],
+    queryFn: () => getUnifiedCases(),
+    refetchInterval: 3000,
+  });
   const s = q.data?.data.summary;
+  const matchingCases = casesQ.data ?? [];
+
   return (
     <State q={q}>
       {s && (
@@ -194,6 +304,7 @@ export function AdminView({ filters }: { filters: ListQuery }) {
             head={['Role', 'Users']}
             rows={s.usersByRole.map((r) => [r.roleKey, r.count])}
           />
+          <CustomerRecordsTable caption="Administration customer records" cases={matchingCases} />
         </>
       )}
     </State>
@@ -331,11 +442,15 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
 
   // CSV Export Handler
   function handleDownloadCsv() {
-    const headers = ['Customer', 'Phone', 'Zip Code', 'Agent / User', 'Submitted Date', 'Call Length', 'Status'];
+    const headers = ['Customer', 'Phone', 'Age', 'Date of Birth', 'State', 'Zip Code', 'SSN | MBI', 'Agent / User', 'Submitted Date', 'Call Length', 'Status'];
     const rows = cases.map((c) => [
       `"${c.customer ? `${c.customer.firstName || ''} ${c.customer.lastName || ''}`.trim() : '—'}"`,
       `"${c.customer?.phone || '—'}"`,
+      `"${calculateAge(c.customer?.dateOfBirth, (c.customer?.extra as any)?.age)}"`,
+      `"${c.customer?.dateOfBirth || '—'}"`,
+      `"${getCustomerState(c.customer)}"`,
       `"${c.customer?.zipCode || '—'}"`,
+      `"${getCustomerSsnMbi(c.customer)}"`,
       `"${c.agent?.fullName || 'Intake Agent'}"`,
       `"${c.submittedAt ? new Date(c.submittedAt).toLocaleString() : '—'}"`,
       `"${c.callLengthDisplay || (c.callLengthSeconds ? formatCallSeconds(c.callLengthSeconds) : '—')}"`,
@@ -513,7 +628,10 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
                 <tr>
                   <th scope="col">CUSTOMER</th>
                   <th scope="col">PHONE</th>
+                  <th scope="col">AGE</th>
+                  <th scope="col">STATE</th>
                   <th scope="col">ZIP CODE</th>
+                  <th scope="col">SSN | MBI</th>
                   <th scope="col">AGENT / USER</th>
                   <th scope="col">SUBMITTED</th>
                   <th scope="col">CALL LENGTH</th>
@@ -523,7 +641,7 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
               <tbody>
                 {cases.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: '24px 12px' }}>
+                    <td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: '24px 12px' }}>
                       No cases match the selected filters.
                     </td>
                   </tr>
@@ -546,7 +664,10 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
                           </Link>
                         </td>
                         <td>{c.customer?.phone || '—'}</td>
+                        <td>{calculateAge(c.customer?.dateOfBirth, (c.customer?.extra as any)?.age)}</td>
+                        <td>{getCustomerState(c.customer)}</td>
                         <td>{c.customer?.zipCode || '—'}</td>
+                        <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{getCustomerSsnMbi(c.customer)}</td>
                         <td>{c.agent?.fullName || 'Intake Agent'}</td>
                         <td style={{ fontSize: 13, color: 'var(--muted, #94a3b8)' }}>{submitted}</td>
                         <td style={{ fontSize: 13 }}>{callLen}</td>

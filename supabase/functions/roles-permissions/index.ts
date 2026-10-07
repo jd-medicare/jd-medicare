@@ -1,6 +1,6 @@
 // supabase/functions/roles-permissions/index.ts
 import { handleCors, jsonResponse, errorResponse } from '../_shared/errors.ts';
-import { requireAuth } from '../_shared/auth.ts';
+import { requireAuth, requirePermission } from '../_shared/auth.ts';
 import { getServiceClient } from '../_shared/db.ts';
 
 Deno.serve(async (req: Request) => {
@@ -54,6 +54,25 @@ Deno.serve(async (req: Request) => {
 
     if (error) return errorResponse('VALIDATION_ERROR', error.message);
     return jsonResponse({ data });
+  }
+
+  // POST /menus
+  if (req.method === 'POST' && (path === '/menus' || path.endsWith('/menus'))) {
+    const permErr = requirePermission(user, 'menu:manage');
+    if (permErr) return permErr;
+
+    const body = await req.json().catch(() => ({}));
+    const key = String(body.key || body.name || '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    if (!key) return errorResponse('VALIDATION_ERROR', 'Menu key is required');
+
+    const { data, error } = await client
+      .from('menus')
+      .upsert({ key }, { onConflict: 'key' })
+      .select('id, key')
+      .single();
+
+    if (error) return errorResponse('VALIDATION_ERROR', error.message);
+    return jsonResponse({ data }, 201);
   }
 
   // GET /organizations/current

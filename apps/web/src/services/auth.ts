@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { api } from './api-client';
 import { supabase } from './supabase';
 import { LoginResult, SessionUserDto } from '../schemas';
+import { DEFAULT_ROLE_MENUS, type RoleKey } from '@shared/enums';
 
 export const authService = {
   login: async (b: { email: string; password: string }) => {
@@ -102,16 +103,41 @@ export const authService = {
   me: async () => {
     const res = await api.call('auth.me', { schema: z.any() });
     const rawUser = res.data.user || res.data;
+    const roleKey = rawUser.role || rawUser.roleKey || 'AGENT';
+    const isSuper = Boolean(
+      rawUser.isPrimarySuperAdmin ||
+      roleKey === 'PRIMARY_SUPER_ADMIN' ||
+      roleKey === 'SUPER_ADMIN' ||
+      roleKey === 'ADMIN' ||
+      roleKey.includes('SUPER_ADMIN') ||
+      roleKey.includes('ADMIN') ||
+      (Array.isArray(rawUser.permissions) && rawUser.permissions.includes('*'))
+    );
+
+    let userMenus: string[] = rawUser.menus || [];
+    if (!userMenus || userMenus.length === 0) {
+      try {
+        const cached = localStorage.getItem(`menus_${rawUser.id}`);
+        if (cached) userMenus = JSON.parse(cached);
+      } catch {}
+    }
+    if ((!userMenus || userMenus.length === 0) && !isSuper) {
+      userMenus = [...(DEFAULT_ROLE_MENUS[roleKey as RoleKey] || ['CUSTOMERS', 'CASES'])];
+    }
+    if (isSuper) {
+      userMenus = ['DASHBOARD', 'CUSTOMERS', 'CASES', 'OUTSOURCE', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO', 'ADMINISTRATION'];
+    }
+
     const mapped: SessionUserDto = {
       id: rawUser.id,
       email: rawUser.email,
       fullName: rawUser.fullName,
       organizationId: rawUser.organizationId,
-      roleKey: rawUser.role || rawUser.roleKey || 'AGENT',
-      permissions: rawUser.permissions || [],
-      menus: rawUser.menus || [],
+      roleKey,
+      permissions: isSuper ? ['*'] : (rawUser.permissions || []),
+      menus: userMenus,
       mfaEnabled: Boolean(rawUser.mfaEnabled),
-      isPrimarySuperAdmin: Boolean(rawUser.isPrimarySuperAdmin),
+      isPrimarySuperAdmin: isSuper,
     };
     return { data: mapped };
   },

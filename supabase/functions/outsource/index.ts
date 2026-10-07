@@ -29,7 +29,7 @@ Deno.serve(async (req: Request) => {
       .select(`
         id, organizationId, customerId, status, version, agentId, teamLeaderId, processedById,
         processedAt, rejectionReason, submittedAt, createdAt, updatedAt,
-        customer:customers(firstName, lastName, phone),
+        customer:customers(id, firstName, lastName, phone, dateOfBirth, address, zipCode, extra),
         callRecord:call_records(durationSeconds)
       `, { count: 'exact' })
       .eq('organizationId', user.organizationId)

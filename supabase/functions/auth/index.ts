@@ -116,7 +116,17 @@ Deno.serve(async (req: Request) => {
 
     // Fetch menus for user role or user override
     let menus: string[] = [];
-    if (auth.user.isPrimarySuperAdmin || auth.user.roleKey === 'PRIMARY_SUPER_ADMIN') {
+    const isSuper = Boolean(
+      auth.user.isPrimarySuperAdmin ||
+      auth.user.roleKey === 'PRIMARY_SUPER_ADMIN' ||
+      auth.user.roleKey === 'SUPER_ADMIN' ||
+      auth.user.roleKey === 'ADMIN' ||
+      auth.user.roleKey.includes('SUPER_ADMIN') ||
+      auth.user.roleKey.includes('ADMIN') ||
+      auth.user.permissions.has('*')
+    );
+
+    if (isSuper) {
       menus = ['DASHBOARD', 'CUSTOMERS', 'CASES', 'OUTSOURCE', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO', 'ADMINISTRATION'];
     } else if (auth.user.menusCustomized) {
       const { data: userMenus } = await client
@@ -124,12 +134,32 @@ Deno.serve(async (req: Request) => {
         .select('menus:menuId(key)')
         .eq('userId', auth.user.id);
       menus = (userMenus || []).map((m: any) => m.menus?.key).filter(Boolean);
+
+      if (!menus || menus.length === 0) {
+        const { data: roleMenus } = await client
+          .from('role_menus')
+          .select('menus:menuId(key)')
+          .eq('roleId', auth.user.roleId);
+        menus = (roleMenus || []).map((m: any) => m.menus?.key).filter(Boolean);
+      }
     } else {
       const { data: roleMenus } = await client
         .from('role_menus')
         .select('menus:menuId(key)')
         .eq('roleId', auth.user.roleId);
       menus = (roleMenus || []).map((m: any) => m.menus?.key).filter(Boolean);
+    }
+
+    if (!menus || menus.length === 0) {
+      const ROLE_MENUS_FALLBACK: Record<string, string[]> = {
+        AGENT: ['DASHBOARD', 'CUSTOMERS', 'CASES'],
+        TEAM_LEADER: ['DASHBOARD', 'CUSTOMERS', 'CASES', 'REPORTS'],
+        OUTSOURCE: ['DASHBOARD', 'OUTSOURCE', 'REPORTS'],
+        ADMIN: ['DASHBOARD', 'REPORTS', 'ADMINISTRATION'],
+        CEO: ['DASHBOARD', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO'],
+        PRIMARY_SUPER_ADMIN: ['DASHBOARD', 'CUSTOMERS', 'CASES', 'OUTSOURCE', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO', 'ADMINISTRATION'],
+      };
+      menus = ROLE_MENUS_FALLBACK[auth.user.roleKey] || ['DASHBOARD', 'CUSTOMERS', 'CASES'];
     }
 
     // Fetch organization info
@@ -149,7 +179,7 @@ Deno.serve(async (req: Request) => {
           status: auth.user.status,
           roleId: auth.user.roleId,
           role: auth.user.roleKey,
-          isPrimarySuperAdmin: auth.user.isPrimarySuperAdmin,
+          isPrimarySuperAdmin: isSuper,
           menusCustomized: auth.user.menusCustomized,
           permissions: Array.from(auth.user.permissions),
           menus,

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_ROLE_MENUS, DEFAULT_ROLE_PERMISSIONS, MENUS, ROLE_KEYS, type RoleKey } from '@shared/enums';
+import { getCustomMenus } from '../../app/nav';
 import { adminService } from '../../services/admin';
 import { authService } from '../../services/auth';
 import { supabase } from '../../services/supabase';
@@ -62,18 +63,124 @@ function RolePicker({ value, onChange, roles }: { value: string; onChange: (k: s
     </fieldset>);
 }
 
-/** Menu checklist: which sidebar pages the user will see. */
-function MenuPicker({ all, value, onChange }: { all: string[]; value: string[]; onChange: (m: string[]) => void }) {
-  const toggle = (k: string) => onChange(value.includes(k) ? value.filter((x) => x !== k) : [...value, k]);
+/** Menu picker with Dropdown + Quick Checkbox Pills + Presets */
+function MenuPicker({
+  all,
+  value,
+  onChange,
+  onResetDefaults,
+}: {
+  all: string[];
+  value: string[];
+  onChange: (m: string[]) => void;
+  onResetDefaults?: () => void;
+}) {
+  const normalizedValue = value.map((x) => x.toUpperCase());
+
+  const toggle = (k: string) => {
+    const key = k.toUpperCase();
+    if (normalizedValue.includes(key)) {
+      onChange(normalizedValue.filter((x) => x !== key));
+    } else {
+      onChange([...normalizedValue, key]);
+    }
+  };
+
+  const handleSelectDropdown = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const chosen = e.target.value;
+    if (!chosen) return;
+    const key = chosen.toUpperCase();
+    if (!normalizedValue.includes(key)) {
+      onChange([...normalizedValue, key]);
+    }
+    e.target.value = '';
+  };
+
+  const selectAll = () => onChange(all.map((x) => x.toUpperCase()));
+  const clearAll = () => onChange([]);
+
   return (
-    <fieldset style={{ border: 0, padding: 0, margin: '14px 0 0' }}>
-      <legend style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>Menu access</legend>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 6 }}>
-        {all.map((k) => (
-          <label key={k} style={{ margin: 0, display: 'flex', gap: 8, alignItems: 'center', fontWeight: 400 }}>
-            <input type="checkbox" checked={value.includes(k)} onChange={() => toggle(k)} />{nice(k)}</label>))}
+    <fieldset style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', margin: '14px 0 0', background: 'var(--surface-muted, rgba(0,0,0,0.02))' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+        <legend style={{ fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.04em', margin: 0 }}>
+          Assign Menu Access ({normalizedValue.length} assigned)
+        </legend>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button type="button" className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={selectAll}>
+            Select all
+          </button>
+          {onResetDefaults && (
+            <button type="button" className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={onResetDefaults}>
+              Role defaults
+            </button>
+          )}
+          <button type="button" className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={clearAll}>
+            Clear
+          </button>
+        </div>
       </div>
-    </fieldset>);
+
+      {/* Dropdown menu selector */}
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--muted, #64748b)', marginBottom: 4 }}>
+          Add menu from dropdown:
+        </label>
+        <select
+          className="input"
+          style={{ width: '100%', height: 38, borderRadius: 6, fontSize: 13 }}
+          defaultValue=""
+          onChange={handleSelectDropdown}
+        >
+          <option value="" disabled>
+            — Select a menu to assign —
+          </option>
+          {all.map((k) => {
+            const isAssigned = normalizedValue.includes(k.toUpperCase());
+            return (
+              <option key={k} value={k}>
+                {nice(k)} {isAssigned ? '✓ (Assigned)' : '+ Add'}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+
+      {/* Interactive toggle pills / checkboxes */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 6 }}>
+        {all.map((k) => {
+          const isChecked = normalizedValue.includes(k.toUpperCase());
+          return (
+            <label
+              key={k}
+              style={{
+                margin: 0,
+                display: 'flex',
+                gap: 8,
+                alignItems: 'center',
+                padding: '6px 10px',
+                borderRadius: 6,
+                border: `1px solid ${isChecked ? 'var(--primary, #3b82f6)' : 'var(--border)'}`,
+                background: isChecked ? 'rgba(59, 130, 246, 0.1)' : 'var(--surface, #ffffff)',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: isChecked ? 600 : 400,
+                userSelect: 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onChange={() => toggle(k)}
+                style={{ accentColor: 'var(--primary, #3b82f6)' }}
+              />
+              <span>{nice(k)}</span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
 }
 
 /** Role and menu catalogs for the dialogs; fall back to the built-in lists if the server call fails or is not permitted. */
@@ -82,21 +189,36 @@ function useCatalog(enabled: boolean) {
   const menus = useQuery({ queryKey: ['menus'], queryFn: () => adminService.menus(), enabled, staleTime: 60_000 });
   const roleList = (roles.data?.data ?? ROLE_KEYS.map((k) => ({ key: k as string, name: nice(k), permissions: [] as string[], menus: [...DEFAULT_ROLE_MENUS[k]] as string[] })))
     .filter((r) => r.key !== 'PRIMARY_SUPER_ADMIN');
-  const menuList = menus.data?.data.map((m) => m.key) ?? [...MENUS] as string[];
-  const defaultsFor = (k: string) => roleList.find((r) => r.key === k)?.menus ?? [];
+
+  const customKeys = getCustomMenus().map((c) => c.key.toUpperCase());
+  const backendKeys = (menus.data?.data || []).map((m: any) => m.key?.toUpperCase()).filter(Boolean);
+  const menuList = Array.from(new Set([...backendKeys, ...[...MENUS], ...customKeys]));
+
+  const defaultsFor = (k: string) => {
+    const fromRole = roleList.find((r) => r.key === k)?.menus;
+    if (fromRole && fromRole.length > 0) return fromRole.map((x) => x.toUpperCase());
+    return ((DEFAULT_ROLE_MENUS[k as RoleKey] || ['CUSTOMERS', 'CASES']) as readonly string[]).map((x) => x.toUpperCase());
+  };
+
   return { roleList, menuList, defaultsFor, rawMenus: menus.data?.data, rawRoles: roles.data?.data };
 }
 
-export function CreateUserDialog({ open, onClose, canMenus = false }: { open: boolean; onClose: () => void; canMenus?: boolean }) {
+export function CreateUserDialog({ open, onClose, canMenus = true }: { open: boolean; onClose: () => void; canMenus?: boolean }) {
   const blank = { email: '', fullName: '', phone: '', roleKey: 'AGENT', password: '' };
   const [f, setF] = useState(blank); const [err, setErr] = useState<Record<string, string>>({});
-  const [menus, setMenus] = useState<string[]>([...DEFAULT_ROLE_MENUS.AGENT]); const [touched, setTouched] = useState(false);
-  const qc = useQueryClient(); const cat = useCatalog(open);
+  const cat = useCatalog(open);
+  const [menus, setMenus] = useState<string[]>([...DEFAULT_ROLE_MENUS.AGENT]);
+  const [touched, setTouched] = useState(false);
+  const qc = useQueryClient();
+
   const m = useMutation({
     mutationFn: async () => {
       const roleObj = cat.rawRoles?.find((r: any) => r.key === f.roleKey || r.id === f.roleKey);
       const roleKeyToSend = roleObj?.key || f.roleKey;
       const roleIdToSend = roleObj?.id;
+
+      const finalMenus = menus && menus.length > 0 ? menus : cat.defaultsFor(f.roleKey);
+
       const res = await adminService.createUser({
         email: f.email.trim(),
         fullName: f.fullName.trim(),
@@ -104,13 +226,24 @@ export function CreateUserDialog({ open, onClose, canMenus = false }: { open: bo
         roleId: roleIdToSend,
         phone: f.phone.trim() || undefined,
         password: f.password || undefined,
+        menus: finalMenus,
       });
-      // Menus are set in a second call (the create endpoint does not take them); only when the admin changed the role defaults.
-      if (canMenus && touched && !sameSet(menus, cat.defaultsFor(f.roleKey))) {
-        const keyToId = new Map(cat.rawMenus?.map((m: any) => [m.key, m.id]) ?? []);
-        const menuIds = menus.map((k) => keyToId.get(k) || k);
-        await adminService.setMenus(res.data.id, menus, menuIds);
+
+      const newUserId = res?.data?.id;
+      if (newUserId) {
+        // Save menus in local cache immediately
+        setSavedMenus(newUserId, finalMenus);
+
+        // Also sync via setMenus
+        try {
+          const keyToId = new Map(cat.rawMenus?.map((m: any) => [m.key.toUpperCase(), m.id]) ?? []);
+          const menuIds = finalMenus.map((k) => keyToId.get(k.toUpperCase()) || k);
+          await adminService.setMenus(newUserId, finalMenus, menuIds);
+        } catch (setErr) {
+          console.warn('Set menus after user create notice:', setErr);
+        }
       }
+
       return res;
     },
     onSuccess: (res) => {
@@ -124,14 +257,30 @@ export function CreateUserDialog({ open, onClose, canMenus = false }: { open: bo
       onClose();
     },
   });
-  useEffect(() => { if (open) { m.reset(); setErr({}); setTouched(false); setMenus(cat.defaultsFor(f.roleKey)); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-  const pickRole = (k: string) => { setF({ ...f, roleKey: k }); if (!touched) setMenus(cat.defaultsFor(k)); };
+
+  useEffect(() => {
+    if (open) {
+      m.reset();
+      setErr({});
+      setTouched(false);
+      setMenus(cat.defaultsFor(f.roleKey));
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickRole = (k: string) => {
+    setF({ ...f, roleKey: k });
+    if (!touched) setMenus(cat.defaultsFor(k));
+  };
+
   function submit(e: FormEvent) {
-    e.preventDefault(); const x: Record<string, string> = {};
+    e.preventDefault();
+    const x: Record<string, string> = {};
     if (!f.fullName.trim()) x.fullName = 'Full name is required.';
     if (!/^\S+@\S+\.\S+$/.test(f.email.trim())) x.email = 'Enter a valid email address.';
-    setErr(x); if (!Object.keys(x).length) m.mutate();
+    setErr(x);
+    if (!Object.keys(x).length) m.mutate();
   }
+
   return (
     <Dialog open={open} title="Create user" onClose={onClose}>
       <form onSubmit={submit} noValidate>
@@ -139,7 +288,20 @@ export function CreateUserDialog({ open, onClose, canMenus = false }: { open: bo
         <TextField label="Email" type="email" required value={f.email} onChange={(v) => setF({ ...f, email: v })} error={err.email} />
         <TextField label="Phone (optional)" type="tel" value={f.phone} onChange={(v) => setF({ ...f, phone: v })} />
         <RolePicker value={f.roleKey} onChange={pickRole} roles={cat.roleList} />
-        {canMenus && <MenuPicker all={cat.menuList} value={menus} onChange={(v) => { setTouched(true); setMenus(v); }} />}
+        {canMenus && (
+          <MenuPicker
+            all={cat.menuList}
+            value={menus}
+            onChange={(v) => {
+              setTouched(true);
+              setMenus(v);
+            }}
+            onResetDefaults={() => {
+              setTouched(false);
+              setMenus(cat.defaultsFor(f.roleKey));
+            }}
+          />
+        )}
         <TextField label="Initial password (optional)" type="password" autoComplete="new-password" value={f.password} onChange={(v) => setF({ ...f, password: v })} />
         {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
         <Actions onClose={onClose} busy={m.isPending} label="Create user" />
@@ -164,13 +326,14 @@ export function MenusDialog({ target, onClose }: { target: UserDto | null; onClo
   const isPSA = Boolean(target?.isPrimarySuperAdmin || target?.roleKey === 'PRIMARY_SUPER_ADMIN');
   const m = useMutation({
     mutationFn: () => {
-      const keyToId = new Map(cat.rawMenus?.map((m: any) => [m.key, m.id]) ?? []);
-      const menuIds = sel.map((k) => keyToId.get(k) || k);
+      const keyToId = new Map(cat.rawMenus?.map((m: any) => [m.key.toUpperCase(), m.id]) ?? []);
+      const menuIds = sel.map((k) => keyToId.get(k.toUpperCase()) || k);
       return adminService.setMenus(target!.id, sel, menuIds);
     },
     onSuccess: () => {
       setSavedMenus(target!.id, sel);
       qc.invalidateQueries({ queryKey: ['users'] });
+      qc.invalidateQueries({ queryKey: ['session'] });
       onClose();
     },
   });
@@ -180,7 +343,12 @@ export function MenusDialog({ target, onClose }: { target: UserDto | null; onClo
       {target && <form onSubmit={(e) => { e.preventDefault(); if (!isPSA) m.mutate(); }}>
         <p style={{ margin: 0 }}>Pages {target.fullName} sees in the sidebar.</p>
         {isPSA && <p className="hint" style={{ marginTop: 8 }}>The Primary Super Admin has full built-in access to all menus and cannot have menu overrides.</p>}
-        <MenuPicker all={cat.menuList} value={sel} onChange={setSel} />
+        <MenuPicker
+          all={cat.menuList}
+          value={sel}
+          onChange={setSel}
+          onResetDefaults={() => setSel([...(cat.defaultsFor(target.roleKey) ?? [])])}
+        />
         {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
         <Actions onClose={onClose} busy={m.isPending || isPSA} label="Save menus" />
       </form>}

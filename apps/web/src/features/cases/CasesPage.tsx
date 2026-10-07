@@ -5,7 +5,7 @@ import { caseService } from '../../services/cases';
 import { outsourceService } from '../../services/outsource';
 import { errorMessage } from '../../services/api-client';
 import { Dialog, Pager, StateRows, StatusBadge, pageStyle } from '../../design-system';
-import { fmtDateTime, parseDuration } from '../../lib/format';
+import { calculateAge, fmtDateTime, getCustomerSsnMbi, getCustomerState, parseDuration } from '../../lib/format';
 import { formatCallSeconds, setCaseStatus } from '../../services/caseSync';
 import { recordAudit } from '../../services/audit';
 import { notifyLiveSync } from '../../services/liveSync';
@@ -16,6 +16,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
   const [page, setPage] = useState(1);
   const [phoneInput, setPhoneInput] = useState('');
   const [zipCodeInput, setZipCodeInput] = useState('');
+  const [stateInput, setStateInput] = useState('');
   const [agentInput, setAgentInput] = useState('');
   const [statusInput, setStatusInput] = useState('');
   const [dateFromInput, setDateFromInput] = useState('');
@@ -30,6 +31,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
   const [appliedFilters, setAppliedFilters] = useState({
     phone: '',
     zipCode: '',
+    state: '',
     agent: '',
     status: '',
     dateFrom: '',
@@ -52,7 +54,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
       }),
   });
 
-  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.roleKey === 'SUPER_ADMIN' || user.roleKey === 'ADMIN' || user.permissions.includes('*'));
   const isTL = user.roleKey === 'TEAM_LEADER';
   const own = user.roleKey === 'AGENT';
   const showCall = isSuper || isTL || user.permissions.includes('call_length:view');
@@ -62,7 +64,8 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
   // Filter client-side by zip code, agent, and Team Leader assignment
   const rawRows = list.data?.data ?? [];
 
-  // Available unique zip codes and agents for dropdowns
+  // Available unique states, zip codes, and agents for dropdowns
+  const availableStates = Array.from(new Set(rawRows.map((c) => getCustomerState(c.customer)).filter((s) => s && s !== '—'))).sort();
   const availableZips = Array.from(new Set(rawRows.map((c) => c.customer?.zipCode?.trim()).filter(Boolean) as string[])).sort();
   const availableAgents: Array<{ id: string; name: string }> = [];
   const seenAgents = new Set<string>();
@@ -88,6 +91,9 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
         (agentId && (myAssignedAgentIds.includes(agentId) || getTeamLeaderIdForAgent(agentId) === user.id));
       if (!isAssigned) return false;
     }
+    if (appliedFilters.state && getCustomerState(c.customer).toLowerCase() !== appliedFilters.state.toLowerCase()) {
+      return false;
+    }
     if (appliedFilters.zipCode && c.customer.zipCode !== appliedFilters.zipCode) {
       return false;
     }
@@ -97,7 +103,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
     return true;
   });
 
-  const cols = 6 + (own ? 0 : 1) + (showCall ? 1 : 0) + (canProcess ? 1 : 0);
+  const cols = 8 + (own ? 0 : 1) + (showCall ? 1 : 0) + (canProcess ? 1 : 0);
 
   // Live auto-filter when user types 7+ digits of phone number
   function handlePhoneChange(val: string) {
@@ -115,6 +121,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
     setAppliedFilters({
       phone: phoneInput.trim(),
       zipCode: zipCodeInput.trim(),
+      state: stateInput.trim(),
       agent: agentInput.trim(),
       status: statusInput,
       dateFrom: dateFromInput,
@@ -126,6 +133,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
   function handleClear() {
     setPhoneInput('');
     setZipCodeInput('');
+    setStateInput('');
     setAgentInput('');
     setStatusInput('');
     setDateFromInput('');
@@ -135,6 +143,7 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
     setAppliedFilters({
       phone: '',
       zipCode: '',
+      state: '',
       agent: '',
       status: '',
       dateFrom: '',
@@ -201,6 +210,26 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
             {availableZips.map((z) => (
               <option key={z} value={z}>
                 {z}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 140, flex: '1 1 140px' }}>
+          <label htmlFor="cases-state" style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--muted, #94a3b8)' }}>
+            State
+          </label>
+          <select
+            id="cases-state"
+            className="input"
+            style={{ height: 40, boxSizing: 'border-box', width: '100%' }}
+            value={stateInput}
+            onChange={(e) => setStateInput(e.target.value)}
+          >
+            <option value="">All states</option>
+            {availableStates.map((st) => (
+              <option key={st} value={st}>
+                {st}
               </option>
             ))}
           </select>
@@ -318,7 +347,10 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
             <tr>
               <th scope="col">Customer</th>
               <th scope="col">Phone</th>
+              <th scope="col">Age</th>
+              <th scope="col">State</th>
               <th scope="col">Zip code</th>
+              <th scope="col">SSN | MBI</th>
               {!own && <th scope="col">Agent</th>}
               <th scope="col">Submitted</th>
               {showCall && <th scope="col">Call length</th>}
@@ -341,7 +373,10 @@ export default function CasesPage({ user }: { user: SessionUserDto }) {
                   </Link>
                 </td>
                 <td>{c.customer.phone}</td>
+                <td>{calculateAge(c.customer.dateOfBirth, (c.customer.extra as any)?.age)}</td>
+                <td>{getCustomerState(c.customer)}</td>
                 <td>{c.customer.zipCode || '—'}</td>
+                <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{getCustomerSsnMbi(c.customer)}</td>
                 {!own && <td>{c.agent.fullName}</td>}
                 <td>{fmtDateTime(c.submittedAt)}</td>
                 {showCall && (

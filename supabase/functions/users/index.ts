@@ -3,6 +3,59 @@ import { handleCors, jsonResponse, errorResponse } from '../_shared/errors.ts';
 import { requireAuth, requirePermission } from '../_shared/auth.ts';
 import { getServiceClient } from '../_shared/db.ts';
 
+async function syncUserMenus(client: any, userId: string, rawItems: string[]) {
+  if (!rawItems || rawItems.length === 0) {
+    await client.from('user_menus').delete().eq('userId', userId);
+    await client.from('users').update({ menusCustomized: false }).eq('id', userId);
+    return;
+  }
+
+  const { data: dbMenus } = await client.from('menus').select('id, key');
+  const keyToId = new Map<string, string>();
+  const idToId = new Set<string>();
+
+  if (dbMenus) {
+    for (const m of dbMenus) {
+      if (m.key) keyToId.set(m.key.toUpperCase(), m.id);
+      if (m.id) idToId.add(m.id);
+    }
+  }
+
+  const validMenuIds: string[] = [];
+  for (const item of rawItems) {
+    const trimmed = String(item || '').trim();
+    if (!trimmed) continue;
+    if (idToId.has(trimmed)) {
+      validMenuIds.push(trimmed);
+    } else {
+      const upper = trimmed.toUpperCase();
+      let foundId = keyToId.get(upper);
+      if (!foundId) {
+        // Auto-create menu key if missing
+        const { data: newMenu } = await client.from('menus').insert({ key: upper }).select('id, key').maybeSingle();
+        if (newMenu?.id) {
+          foundId = newMenu.id;
+          keyToId.set(upper, foundId);
+          idToId.add(foundId);
+        }
+      }
+      if (foundId && !validMenuIds.includes(foundId)) {
+        validMenuIds.push(foundId);
+      }
+    }
+  }
+
+  await client.from('user_menus').delete().eq('userId', userId);
+  if (validMenuIds.length > 0) {
+    await client.from('user_menus').insert(
+      validMenuIds.map((menuId) => ({ userId, menuId }))
+    );
+    await client.from('users').update({ menusCustomized: true }).eq('id', userId);
+  } else {
+    await client.from('users').update({ menusCustomized: false }).eq('id', userId);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -125,6 +178,11 @@ Deno.serve(async (req: Request) => {
 
     if (dbError) {
       return errorResponse('VALIDATION_ERROR', dbError.message);
+    }
+
+    const menusParam = body.menus || body.menuIds;
+    if (Array.isArray(menusParam) && menusParam.length > 0) {
+      await syncUserMenus(client, authUserId, menusParam);
     }
 
     return jsonResponse({ data: newUser }, 201);
@@ -295,17 +353,11 @@ Deno.serve(async (req: Request) => {
     if (permErr) return permErr;
 
     const body = await req.json().catch(() => ({}));
-    const menuIds: string[] = body.menuIds || [];
+    const rawMenus: string[] = body.menus || [];
+    const rawMenuIds: string[] = body.menuIds || [];
+    const requested = Array.from(new Set([...rawMenus, ...rawMenuIds]));
 
-    await client.from('user_menus').delete().eq('userId', targetId);
-    if (menuIds.length > 0) {
-      await client.from('user_menus').insert(
-        menuIds.map((mId) => ({ userId: targetId, menuId: mId }))
-      );
-      await client.from('users').update({ menusCustomized: true }).eq('id', targetId);
-    } else {
-      await client.from('users').update({ menusCustomized: false }).eq('id', targetId);
-    }
+    await syncUserMenus(client, targetId, requested);
     return jsonResponse({ data: { success: true } });
   }
 

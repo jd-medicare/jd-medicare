@@ -5,6 +5,7 @@ import { errorMessage } from '../../services/api-client';
 import { Dialog, StatusBadge } from '../../design-system';
 import { setCaseStatus } from '../../services/caseSync';
 import { notifyLiveSync } from '../../services/liveSync';
+import { calculateAge, fmtDateTime, getCustomerSsnMbi, getCustomerState } from '../../lib/format';
 import type { CaseDto, SessionUserDto } from '../../schemas';
 
 export default function OutsourcePage({ user }: { user: SessionUserDto }) {
@@ -14,6 +15,7 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
   const [appliedFilters, setAppliedFilters] = useState({ phone: '', status: '' });
   const [sort, setSort] = useState('submittedAt:desc');
   const [target, setTarget] = useState<{ c: CaseDto; kind: 'accept' | 'reject' } | null>(null);
+  const [detailsTarget, setDetailsTarget] = useState<CaseDto | null>(null);
   const qc = useQueryClient();
 
   const list = useQuery({
@@ -34,13 +36,13 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
     refetchInterval: 3000,
     queryFn: () => outsourceService.summary(),
   });
-  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.roleKey === 'SUPER_ADMIN' || user.roleKey === 'ADMIN' || user.permissions.includes('*'));
   const canProcess = isSuper || user.permissions.includes('case:accept');
   const toggleSort = (f: string) => setSort(sort === `${f}:asc` ? `${f}:desc` : `${f}:asc`);
   const rows = list.data?.data ?? [];
   const meta = list.data?.meta;
   const s = summary.data?.data;
-  const cols = canProcess ? 6 : 5;
+  const cols = canProcess ? 10 : 9;
 
   const kpis: Array<[string, string | number]> = s
     ? [
@@ -158,6 +160,10 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
             <tr>
               <th scope="col">Customer</th>
               <th scope="col">Phone</th>
+              <th scope="col">Age</th>
+              <th scope="col">State</th>
+              <th scope="col">Zip code</th>
+              <th scope="col">SSN | MBI</th>
               <th scope="col">Agent</th>
               <th
                 scope="col"
@@ -188,9 +194,29 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
             {rows.map((c) => (
               <tr key={c.id}>
                 <td>
-                  {c.customer.firstName} {c.customer.lastName}
+                  <button
+                    type="button"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      fontWeight: 600,
+                      color: 'var(--primary, #3b82f6)',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      textDecoration: 'underline',
+                    }}
+                    onClick={() => setDetailsTarget(c)}
+                    title="Click to view full customer details"
+                  >
+                    {c.customer.firstName} {c.customer.lastName}
+                  </button>
                 </td>
                 <td>{c.customer.phone}</td>
+                <td>{calculateAge(c.customer.dateOfBirth, (c.customer.extra as any)?.age)}</td>
+                <td>{getCustomerState(c.customer)}</td>
+                <td>{c.customer.zipCode || '—'}</td>
+                <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{getCustomerSsnMbi(c.customer)}</td>
                 <td>{c.agent.fullName}</td>
                 <td>{c.callLengthDisplay ?? '—'}</td>
                 <td>
@@ -238,6 +264,11 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
           qc.invalidateQueries({ queryKey: ['outsource'] });
           qc.invalidateQueries({ queryKey: ['outsource-summary'] });
         }}
+      />
+
+      <CustomerDetailsDialog
+        target={detailsTarget}
+        onClose={() => setDetailsTarget(null)}
       />
     </main>
   );
@@ -319,9 +350,28 @@ function ProcessDialog({
     <Dialog open={!!target} title={reject ? 'Reject this record' : 'Accept this record'} onClose={onClose}>
       {target && (
         <div style={{ marginBottom: 16 }}>
-          <p style={{ margin: '0 0 8px 0', fontSize: 14 }}>
-            <strong>{target.c.customer.firstName} {target.c.customer.lastName}</strong> ({target.c.customer.phone})
-          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '6px 12px', fontSize: 13, background: 'rgba(255, 255, 255, 0.04)', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>Customer:</span>
+            <strong>{target.c.customer.firstName} {target.c.customer.lastName}</strong>
+
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>Phone:</span>
+            <span>{target.c.customer.phone}</span>
+
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>Age:</span>
+            <span>{calculateAge(target.c.customer.dateOfBirth, (target.c.customer.extra as any)?.age)}</span>
+
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>State:</span>
+            <span>{getCustomerState(target.c.customer)}</span>
+
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>Zip code:</span>
+            <span>{target.c.customer.zipCode || '—'}</span>
+
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>SSN | MBI:</span>
+            <span>{getCustomerSsnMbi(target.c.customer)}</span>
+
+            <span style={{ color: 'var(--muted, #94a3b8)' }}>Agent:</span>
+            <span>{target.c.agent?.fullName || '—'}</span>
+          </div>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--muted, #94a3b8)' }}>
             {reject
               ? 'Are you sure you want to mark this record as Rejected?'
@@ -357,6 +407,57 @@ function ProcessDialog({
         >
           {m.isPending ? 'Processing…' : reject ? 'Reject record' : 'Accept record'}
         </button>
+      </div>
+    </Dialog>
+  );
+}
+
+function CustomerDetailsDialog({ target, onClose }: { target: CaseDto | null; onClose: () => void }) {
+  if (!target) return null;
+  const c = target.customer;
+  return (
+    <Dialog open={!!target} title="Customer Full Details" onClose={onClose}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '8px 12px', fontSize: 14 }}>
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Full Name:</span>
+          <strong>{c.firstName} {c.lastName}</strong>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Phone:</span>
+          <strong>{c.phone}</strong>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Age:</span>
+          <strong>{calculateAge(c.dateOfBirth, (c.extra as any)?.age)}</strong>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Date of birth:</span>
+          <span>{c.dateOfBirth || '—'}</span>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>State:</span>
+          <span>{getCustomerState(c)}</span>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Zip code:</span>
+          <span>{c.zipCode || '—'}</span>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>SSN | MBI:</span>
+          <span>{getCustomerSsnMbi(c)}</span>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Intake Agent:</span>
+          <span>{target.agent?.fullName || '—'}</span>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Call length:</span>
+          <span>{target.callLengthDisplay || '—'}</span>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Status:</span>
+          <div><StatusBadge status={target.status} /></div>
+
+          <span style={{ color: 'var(--muted, #94a3b8)' }}>Submitted:</span>
+          <span>{fmtDateTime(target.submittedAt)}</span>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+          <button type="button" className="btn btn-primary" onClick={onClose}>
+            Close
+          </button>
+        </div>
       </div>
     </Dialog>
   );

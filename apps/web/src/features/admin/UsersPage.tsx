@@ -40,7 +40,7 @@ export default function UsersPage({ user }: { user: SessionUserDto }) {
     queryFn: () => adminService.users({ page, pageSize: 50, status }),
   });
 
-  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions?.includes('*'));
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.roleKey === 'SUPER_ADMIN' || user.roleKey === 'ADMIN' || user.permissions?.includes('*'));
   const rawRows = list.data?.data ?? [];
 
   useEffect(() => {
@@ -71,6 +71,11 @@ export default function UsersPage({ user }: { user: SessionUserDto }) {
     <main style={pageStyle}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <h1 style={{ margin: 0, flex: 1 }}>Users</h1>
+        {has('menu:manage') && (
+          <Link to="/admin/menus" className="btn" style={{ textDecoration: 'none' }}>
+            📋 Manage Menus
+          </Link>
+        )}
         {has('audit:view') && <Link to="/admin/audit">Audit log</Link>}
         <button
           type="button"

@@ -6,17 +6,20 @@ import { errorMessage } from '../../services/api-client';
 import { recordAudit } from '../../services/audit';
 import { notifyLiveSync } from '../../services/liveSync';
 import { Dialog, StatusBadge, pageStyle } from '../../design-system';
-import { today, fmtDateTime } from '../../lib/format';
+import { saveLocallyRegisteredCustomer } from '../../services/caseSync';
+import { today, fmtDateTime, calculateAge, dobFromAge } from '../../lib/format';
 import type { SessionUserDto } from '../../schemas';
 
-const EMPTY: CustomerForm & { email?: string } = {
+const EMPTY: CustomerForm & { state: string; ssnMbi: string; age: string } = {
   firstName: '',
   lastName: '',
   phone: '',
   dateOfBirth: '',
+  age: '',
   address: '',
+  state: '',
   zipCode: '',
-  email: '',
+  ssnMbi: '',
 };
 
 type FormState = typeof EMPTY;
@@ -24,6 +27,7 @@ type Errors = Partial<Record<keyof FormState, string>>;
 
 export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
   const [f, setF] = useState<FormState>(EMPTY);
+  const [birthMode, setBirthMode] = useState<'dob' | 'age'>('dob');
   const [errors, setErrors] = useState<Errors>({});
   const [matchingCustomers, setMatchingCustomers] = useState<CustomerWithCaseStatus[]>([]);
   const [isSearchingPhone, setIsSearchingPhone] = useState(false);
@@ -36,6 +40,16 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
     onSuccess: (res, variables) => {
       // Record in audit log
       if (res?.data?.customer?.id) {
+        saveLocallyRegisteredCustomer({
+          ...res.data.customer,
+          address: variables.address || variables.state || '',
+          extra: {
+            ...(res.data.customer.extra || {}),
+            state: variables.state || variables.address,
+            ssnMbi: variables.ssnMbi,
+            age: variables.age || (variables.extra as any)?.age,
+          },
+        });
         recordAudit('CUSTOMER_CREATED', 'customer', res.data.customer.id, {
           name: `${variables.firstName} ${variables.lastName}`,
           phone: variables.phone,
@@ -97,9 +111,16 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
     else if (!/^\+?[0-9 ()-]{7,20}$/.test(f.phone.trim())) {
       eMap.phone = 'Enter a valid phone number, for example +1 555 123 4567.';
     }
-    if (!f.dateOfBirth) eMap.dateOfBirth = 'Date of birth is required.';
-    else if (f.dateOfBirth > today()) eMap.dateOfBirth = 'Date of birth cannot be in the future.';
-    if (!f.address.trim()) eMap.address = 'Address is required.';
+    const effectiveDob = f.dateOfBirth.trim() || (f.age.trim() ? dobFromAge(f.age.trim()) : '');
+    const effectiveAge = f.age.trim() || (effectiveDob ? calculateAge(effectiveDob) : '');
+
+    if (!effectiveDob && !effectiveAge) {
+      eMap.dateOfBirth = 'Date of birth or Age is required.';
+    } else if (effectiveDob && effectiveDob > today()) {
+      eMap.dateOfBirth = 'Date of birth cannot be in the future.';
+    }
+    const stateVal = (f.state || f.address).trim();
+    if (!stateVal) eMap.state = 'State is required.';
     if (!f.zipCode.trim()) eMap.zipCode = 'Zip code is required.';
 
     setErrors(eMap);
@@ -108,9 +129,17 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
         firstName: f.firstName.trim(),
         lastName: f.lastName.trim(),
         phone: f.phone.trim(),
-        dateOfBirth: f.dateOfBirth,
-        address: f.address.trim(),
+        dateOfBirth: effectiveDob,
+        age: effectiveAge,
+        address: stateVal,
+        state: stateVal,
         zipCode: f.zipCode.trim(),
+        ssnMbi: f.ssnMbi.trim(),
+        extra: {
+          state: stateVal,
+          ssnMbi: f.ssnMbi.trim(),
+          age: effectiveAge,
+        },
       });
     }
   }
@@ -368,37 +397,117 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
               </div>
 
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span>📅</span> Date of birth *
-                </label>
-                <input
-                  className="input"
-                  type="date"
-                  max={today()}
-                  style={{ width: '100%', height: 42, borderRadius: 8 }}
-                  value={f.dateOfBirth}
-                  onChange={(e) => set('dateOfBirth')(e.target.value)}
-                />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                    <span>{birthMode === 'dob' ? '📅' : '🎂'}</span> {birthMode === 'dob' ? 'Date of birth' : 'Age'} *
+                  </label>
+                  <div style={{ display: 'inline-flex', gap: 4, background: 'rgba(99, 29, 87, 0.08)', padding: 3, borderRadius: 8 }}>
+                    <button
+                      type="button"
+                      style={{
+                        padding: '3px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        border: 'none',
+                        cursor: 'pointer',
+                        borderRadius: 6,
+                        background: birthMode === 'dob' ? 'var(--primary, #631d57)' : 'transparent',
+                        color: birthMode === 'dob' ? '#ffffff' : 'var(--muted, #64748b)',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onClick={() => setBirthMode('dob')}
+                    >
+                      📅 Birthdate
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        padding: '3px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        border: 'none',
+                        cursor: 'pointer',
+                        borderRadius: 6,
+                        background: birthMode === 'age' ? 'var(--primary, #631d57)' : 'transparent',
+                        color: birthMode === 'age' ? '#ffffff' : 'var(--muted, #64748b)',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onClick={() => setBirthMode('age')}
+                    >
+                      🎂 Age
+                    </button>
+                  </div>
+                </div>
+
+                {birthMode === 'dob' ? (
+                  <div>
+                    <input
+                      className="input"
+                      type="date"
+                      max={today()}
+                      style={{ width: '100%', height: 42, borderRadius: 8 }}
+                      value={f.dateOfBirth}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const computedAge = val ? calculateAge(val) : '';
+                        setF({ ...f, dateOfBirth: val, age: computedAge !== '—' ? computedAge : '' });
+                        if (m.isSuccess) m.reset();
+                      }}
+                    />
+                    {f.dateOfBirth && f.dateOfBirth <= today() && (
+                      <div style={{ fontSize: 12, color: 'var(--primary, #631d57)', marginTop: 4, fontWeight: 600 }}>
+                        Calculated age: {calculateAge(f.dateOfBirth)} years old
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <input
+                      className="input"
+                      type="number"
+                      min="1"
+                      max="125"
+                      placeholder="Enter age (e.g. 45, 65, 72)"
+                      style={{ width: '100%', height: 42, borderRadius: 8 }}
+                      value={f.age}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const computedDob = val ? dobFromAge(val) : '';
+                        setF({ ...f, age: val, dateOfBirth: computedDob });
+                        if (m.isSuccess) m.reset();
+                      }}
+                    />
+                    {f.age && (
+                      <div style={{ fontSize: 12, color: 'var(--primary, #631d57)', marginTop: 4, fontWeight: 600 }}>
+                        Estimated birth year: {dobFromAge(f.age).slice(0, 4)}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {errors.dateOfBirth && <span className="err" role="alert">{errors.dateOfBirth}</span>}
               </div>
 
-              {/* Row 3: Address (Full width) */}
+              {/* Row 3: State */}
               <div style={{ gridColumn: 'span 2' }}>
                 <label style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span>📍</span> Address *
+                  <span>📍</span> State *
                 </label>
                 <input
                   className="input"
                   style={{ width: '100%', height: 42, borderRadius: 8 }}
-                  placeholder="Enter complete address"
-                  autoComplete="off"
-                  value={f.address}
-                  onChange={(e) => set('address')(e.target.value)}
+                  placeholder="Enter state (e.g. CA, NY, TX, FL)"
+                  autoComplete="address-level1"
+                  value={f.state}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setF({ ...f, state: val, address: val });
+                    if (m.isSuccess) m.reset();
+                  }}
                 />
-                {errors.address && <span className="err" role="alert">{errors.address}</span>}
+                {errors.state && <span className="err" role="alert">{errors.state}</span>}
               </div>
 
-              {/* Row 4: Zip code & Email (optional) */}
+              {/* Row 4: Zip code & SSN | MBI number */}
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span>💳</span> Zip code *
@@ -407,7 +516,7 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
                   className="input"
                   style={{ width: '100%', height: 42, borderRadius: 8 }}
                   placeholder="Enter zip code"
-                  autoComplete="off"
+                  autoComplete="postal-code"
                   value={f.zipCode}
                   onChange={(e) => set('zipCode')(e.target.value)}
                 />
@@ -416,16 +525,16 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
 
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span>✉️</span> Email (optional)
+                  <span>🛡️</span> SSN | MBI number
                 </label>
                 <input
                   className="input"
-                  type="email"
+                  type="text"
                   style={{ width: '100%', height: 42, borderRadius: 8 }}
-                  placeholder="Enter email address"
+                  placeholder="e.g. 123-45-6789 or 1EG4-TE5-MK73"
                   autoComplete="off"
-                  value={f.email ?? ''}
-                  onChange={(e) => set('email')(e.target.value)}
+                  value={f.ssnMbi ?? ''}
+                  onChange={(e) => set('ssnMbi')(e.target.value)}
                 />
               </div>
             </div>
@@ -566,8 +675,14 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
               <span style={{ color: 'var(--muted, #94a3b8)' }}>Date of birth:</span>
               <span>{detailsCustomer.dateOfBirth || '—'}</span>
 
-              <span style={{ color: 'var(--muted, #94a3b8)' }}>Address:</span>
-              <span>{detailsCustomer.address || '—'}</span>
+              <span style={{ color: 'var(--muted, #94a3b8)' }}>Age:</span>
+              <span>{calculateAge(detailsCustomer.dateOfBirth, (detailsCustomer.extra as any)?.age)}</span>
+
+              <span style={{ color: 'var(--muted, #94a3b8)' }}>State:</span>
+              <span>{detailsCustomer.address || (detailsCustomer.extra as any)?.state || '—'}</span>
+
+              <span style={{ color: 'var(--muted, #94a3b8)' }}>SSN | MBI:</span>
+              <span>{(detailsCustomer.extra as any)?.ssnMbi || '—'}</span>
 
               <span style={{ color: 'var(--muted, #94a3b8)' }}>Zip code:</span>
               <span>{detailsCustomer.zipCode || '—'}</span>

@@ -136,7 +136,7 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
   try {
     const { data: dbCustomers } = await supabase
       .from('customers')
-      .select('id, firstName, lastName, phone, dateOfBirth, address, zipCode, createdById, createdAt')
+      .select('id, firstName, lastName, phone, dateOfBirth, address, zipCode, extra, createdById, createdAt')
       .limit(100);
 
     if (dbCustomers) {

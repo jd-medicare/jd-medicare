@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { authService } from '../services/auth';
 import type { SessionUserDto } from '../schemas';
 import { AppShell } from './AppShell';
-import { homeFor, NAV } from './nav';
+import { homeFor, NAV, isSuperUser } from './nav';
 const LoginPage = lazy(() => import('../features/auth/LoginPage'));
 const ForgotPasswordPage = lazy(() => import('../features/auth/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('../features/auth/ResetPasswordPage'));
@@ -13,6 +13,7 @@ const NewCustomerPage = lazy(() => import('../features/agent/NewCustomerPage'));
 const CasesPage = lazy(() => import('../features/cases/CasesPage'));
 const CaseDetailPage = lazy(() => import('../features/cases/CaseDetailPage'));
 const UsersPage = lazy(() => import('../features/admin/UsersPage'));
+const MenusManagementPage = lazy(() => import('../features/admin/MenusManagementPage'));
 const TeamAgentsPage = lazy(() => import('../features/team/TeamAgentsPage'));
 const AuditPage = lazy(() => import('../features/admin/AuditPage'));
 const CeoDashboardPage = lazy(() => import('../features/ceo/CeoDashboardPage'));
@@ -26,8 +27,11 @@ function Guard({ menu, perm, children }: { menu?: string; perm?: string; childre
   const { data: user, isLoading, isError } = useSession();
   if (isLoading) return <Skeleton />;
   if (isError || !user) return <Navigate to="/login" replace />;
-  const isSuper = user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*');
-  const denied = !isSuper && ((menu && !user.menus.includes(menu)) || (perm && !user.permissions.includes(perm)));
+  const isSuper = isSuperUser(user);
+  const userMenus = (user.menus || []).map((m) => m.toUpperCase());
+  const hasMenu = menu ? userMenus.includes(menu.toUpperCase()) : true;
+  const hasPerm = perm ? (user.permissions.includes(perm) || user.permissions.includes('*')) : true;
+  const denied = !isSuper && (!hasMenu || !hasPerm);
   return <AppShell user={user}>{denied ? <p role="alert" style={{ padding: 24 }}>You do not have access to this page.</p> : children(user)}</AppShell>;
 }
 /** Gate taken from the nav table so a route and its nav link can never disagree. */
@@ -40,7 +44,7 @@ function Home() {
   if (isLoading) return <Skeleton />;
   if (isError || !user) return <Navigate to="/login" replace />;
   const to = homeFor(user);
-  return to ? <Navigate to={to} replace /> : <p role="alert" style={{ padding: 24 }}>No pages are assigned to your account. Contact your administrator.</p>;
+  return <Navigate to={to || '/cases'} replace />;
 }
 import { useLiveSyncListener } from '../services/liveSync';
 
@@ -64,6 +68,7 @@ export function App() {
           <Route path="/finance/income" element={<R nav="/finance/income">{(u) => <FinancePage kind="income" user={u} />}</R>} />
           <Route path="/finance/expenses" element={<R nav="/finance/expenses">{(u) => <FinancePage kind="expense" user={u} />}</R>} />
           <Route path="/admin/users" element={<R nav="/admin/users">{(u) => <UsersPage user={u} />}</R>} />
+          <Route path="/admin/menus" element={<R nav="/admin/menus">{(u) => <MenusManagementPage user={u} />}</R>} />
           <Route path="/admin/audit" element={<R nav="/admin/audit">{() => <AuditPage />}</R>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

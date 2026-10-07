@@ -108,8 +108,17 @@ export async function requireAuth(req: Request): Promise<AuthResult> {
     'ceo:dashboard', 'audit:view',
   ];
 
-  if (dbUser.isPrimarySuperAdmin || roleKey === 'PRIMARY_SUPER_ADMIN') {
-    // Primary super admin has all permissions and full wildcard access
+  const isSuper = Boolean(
+    dbUser.isPrimarySuperAdmin ||
+    roleKey === 'PRIMARY_SUPER_ADMIN' ||
+    roleKey === 'SUPER_ADMIN' ||
+    roleKey === 'ADMIN' ||
+    roleKey.includes('SUPER_ADMIN') ||
+    roleKey.includes('ADMIN')
+  );
+
+  if (isSuper) {
+    // Primary super admin, super admin, and admin have all permissions and full wildcard access
     permissionsSet.add('*');
     for (const p of ALL_PERMISSIONS) permissionsSet.add(p);
   } else {
@@ -186,7 +195,8 @@ export async function requireAuth(req: Request): Promise<AuthResult> {
 }
 
 export function hasPermission(user: UserContext, requiredPermission: string): boolean {
-  if (user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN') return true;
+  const r = (user.roleKey || '').toUpperCase();
+  if (user.isPrimarySuperAdmin || r === 'PRIMARY_SUPER_ADMIN' || r === 'SUPER_ADMIN' || r === 'ADMIN' || r.includes('SUPER_ADMIN') || r.includes('ADMIN')) return true;
   if (user.permissions.has('*')) return true;
   return user.permissions.has(requiredPermission);
 }

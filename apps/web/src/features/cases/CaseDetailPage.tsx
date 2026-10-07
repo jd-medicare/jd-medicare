@@ -5,15 +5,33 @@ import { caseService } from '../../services/cases';
 import { errorMessage } from '../../services/api-client';
 import { recordAudit } from '../../services/audit';
 import { Loading, StatusBadge, TextField, pageStyle } from '../../design-system';
-import { fmtDateTime, parseDuration } from '../../lib/format';
+import { calculateAge, fmtDateTime, getCustomerSsnMbi, getCustomerState, parseDuration } from '../../lib/format';
 import type { SessionUserDto } from '../../schemas';
 
 export default function CaseDetailPage({ user }: { user: SessionUserDto }) {
   const id = useParams().id ?? '';
   const q = useQuery({ queryKey: ['case', id], queryFn: () => caseService.get(id), enabled: !!id });
   const c = q.data?.data;
-  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.roleKey === 'SUPER_ADMIN' || user.roleKey === 'ADMIN' || user.permissions.includes('*'));
   const canSet = isSuper || user.permissions.includes('call_length:create') || user.permissions.includes('call_length:update');
+  const ssnMbiVal = getCustomerSsnMbi(c?.customer);
+  const stateVal = getCustomerState(c?.customer);
+  const ageVal = calculateAge(c?.customer?.dateOfBirth, (c?.customer?.extra as any)?.age);
+  const detailItems: Array<[string, string]> = c ? [
+    ['Phone', c.customer.phone],
+    ['Date of birth', c.customer.dateOfBirth ?? '—'],
+    ['Age', ageVal],
+    ['State', stateVal],
+    ['Zip code', c.customer.zipCode || '—'],
+    ...(ssnMbiVal && ssnMbiVal !== '—' ? [['SSN | MBI', ssnMbiVal] as [string, string]] : []),
+    ['Agent', c.agent.fullName],
+    ['Team leader', c.teamLeader?.fullName ?? '—'],
+    ['Submitted', fmtDateTime(c.submittedAt)],
+    ['Processed', fmtDateTime(c.processedAt)],
+    ['Processed by', c.processedBy?.fullName ?? '—'],
+    ['Rejection reason', c.rejectionReason ?? '—'],
+    ['Call length', c.callLengthDisplay ?? 'Not set'],
+  ] : [];
   return (
     <main style={pageStyle}>
       <p style={{ margin: 0 }}><Link to="/cases">Back to cases</Link></p>
@@ -22,10 +40,7 @@ export default function CaseDetailPage({ user }: { user: SessionUserDto }) {
       {c && (<>
         <h1 style={{ margin: 0 }}>{c.customer.firstName} {c.customer.lastName} <StatusBadge status={c.status} /></h1>
         <section className="card" aria-label="Case details"><dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '8px 24px', margin: 0 }}>
-          {([['Phone', c.customer.phone], ['Date of birth', c.customer.dateOfBirth ?? '—'], ['Address', c.customer.address ?? '—'], ['Zip code', c.customer.zipCode],
-            ['Agent', c.agent.fullName], ['Team leader', c.teamLeader?.fullName ?? '—'], ['Submitted', fmtDateTime(c.submittedAt)],
-            ['Processed', fmtDateTime(c.processedAt)], ['Processed by', c.processedBy?.fullName ?? '—'], ['Rejection reason', c.rejectionReason ?? '—'],
-            ['Call length', c.callLengthDisplay ?? 'Not set']] as Array<[string, string]>).map(([k, v]) => (<div key={k} style={{ display: 'contents' }}><dt style={{ color: 'var(--secondary)' }}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></div>))}
+          {detailItems.map(([k, v]) => (<div key={k} style={{ display: 'contents' }}><dt style={{ color: 'var(--secondary)' }}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></div>))}
         </dl></section>
         {canSet && <CallLengthForm caseId={c.id} current={c.callLengthDisplay} />}
       </>)}

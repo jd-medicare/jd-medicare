@@ -9,7 +9,7 @@ import { CreateExpenseHeadDialog, CreateTxDialog, VoidDialog } from './FinanceDi
 export default function FinancePage({ kind, user }: { kind: Kind; user: SessionUserDto }) {
   const [page, setPage] = useState(1); const [status, setStatus] = useState(''); const [dateFrom, setDateFrom] = useState(''); const [dateTo, setDateTo] = useState('');
   const [creating, setCreating] = useState(false); const [headOpen, setHeadOpen] = useState(false); const [target, setTarget] = useState<TxRow | null>(null);
-  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.roleKey === 'SUPER_ADMIN' || user.roleKey === 'ADMIN' || user.permissions.includes('*'));
   const income = kind === 'income'; const can = (p: string) => isSuper || user.permissions.includes(p);
   const list = useQuery({
     queryKey: ['finance', kind, page, status, dateFrom, dateTo],

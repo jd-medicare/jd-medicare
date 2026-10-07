@@ -17,8 +17,12 @@ export interface CustomerForm {
   lastName: string;
   phone: string;
   dateOfBirth: string;
+  age?: string | number;
   address: string;
   zipCode: string;
+  state?: string;
+  ssnMbi?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface CustomerWithCaseStatus extends CustomerDto {
@@ -162,7 +166,7 @@ export const caseService = {
       // 1. Direct Supabase query
       const { data } = await supabase
         .from('customers')
-        .select('id, firstName, lastName, phone, dateOfBirth, address, zipCode, createdAt')
+        .select('id, firstName, lastName, phone, dateOfBirth, address, zipCode, extra, createdAt')
         .ilike('phone', `%${digits}%`)
         .limit(5);
 

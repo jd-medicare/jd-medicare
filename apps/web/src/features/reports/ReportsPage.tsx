@@ -24,7 +24,7 @@ const BY_ROLE: Record<string, string[]> = {
 };
 
 export default function ReportsPage({ user }: { user: SessionUserDto }) {
-  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
+  const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.roleKey === 'SUPER_ADMIN' || user.roleKey === 'ADMIN' || user.permissions.includes('*'));
   const types = isSuper ? ['CEO_CASES', 'OUTSOURCE', 'TEAM_LEADER', 'ADMIN'] : BY_ROLE[user.roleKey] ?? [];
 
   const [typeInput, setTypeInput] = useState(types[0] ?? 'CEO_CASES');

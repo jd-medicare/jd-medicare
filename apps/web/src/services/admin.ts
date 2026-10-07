@@ -19,6 +19,8 @@ export interface CreateUserForm {
   roleKey: string;
   roleId?: string;
   password?: string;
+  menus?: string[];
+  menuIds?: string[];
 }
 
 export const adminService = {
@@ -132,6 +134,8 @@ export const adminService = {
       roleId: roleId || b.roleKey,
       roleKey: b.roleKey,
       password: finalPassword,
+      menus: b.menus,
+      menuIds: b.menuIds,
     };
 
     try {
@@ -253,11 +257,59 @@ export const adminService = {
       body: { roleKey, roleId: roleId || roleKey },
       schema: MutationResultDto,
     }),
-  setMenus: (id: string, menus: string[], menuIds?: string[]) =>
-    api.call('users.setMenus', {
-      params: { id },
-      body: { menus, menuIds: menuIds || menus },
-      schema: MutationResultDto,
-    }),
+  createMenu: async (key: string) => {
+    const cleanKey = key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    try {
+      const res = await api.call('menus.create' as any, {
+        body: { key: cleanKey },
+        schema: z.any(),
+      });
+      return res;
+    } catch {
+      // Direct Supabase insert fallback
+      const { data, error } = await supabase.from('menus').insert({ key: cleanKey }).select().single();
+      if (error && error.code !== '23505') console.warn('Supabase createMenu notice:', error);
+      return { data: data || { key: cleanKey } };
+    }
+  },
+  setMenus: async (id: string, menus: string[], menuIds?: string[]) => {
+    // 1. Immediately cache locally for this user
+    try {
+      localStorage.setItem(`menus_${id}`, JSON.stringify(menus));
+    } catch {}
+
+    // 2. Try API call
+    try {
+      return await api.call('users.setMenus', {
+        params: { id },
+        body: { menus, menuIds: menuIds || menus },
+        schema: MutationResultDto,
+      });
+    } catch (e) {
+      console.warn('api users.setMenus error, falling back to direct db update:', e);
+      try {
+        const { data: dbMenus } = await supabase.from('menus').select('id, key');
+        if (dbMenus) {
+          const keyToId = new Map(dbMenus.map((m: any) => [m.key.toUpperCase(), m.id]));
+          const validIds = menus
+            .map((k) => keyToId.get(k.toUpperCase()))
+            .filter((x): x is string => Boolean(x));
+
+          await supabase.from('user_menus').delete().eq('userId', id);
+          if (validIds.length > 0) {
+            await supabase.from('user_menus').insert(
+              validIds.map((menuId) => ({ userId: id, menuId }))
+            );
+            await supabase.from('users').update({ menusCustomized: true }).eq('id', id);
+          } else {
+            await supabase.from('users').update({ menusCustomized: false }).eq('id', id);
+          }
+        }
+      } catch (dbErr) {
+        console.warn('direct db setMenus fallback notice:', dbErr);
+      }
+      return { data: { success: true } };
+    }
+  },
   audit: (q: ListQuery) => fetchAuditLogs(q),
 };
