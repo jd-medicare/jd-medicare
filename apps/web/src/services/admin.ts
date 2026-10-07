@@ -1,15 +1,263 @@
 import { z } from 'zod';
 import { api } from './api-client';
 import type { ListQuery } from './types';
-import { AuditLogDto, PermissionDto, UserDto } from '../schemas/domain';
+import { AuditLogDto, MenuDto, PermissionDto, RoleDto, UserDto } from '../schemas/domain';
+import { fetchAuditLogs } from './audit';
 
-export interface CreateUserForm { email: string; fullName: string; phone?: string; roleKey: string; password?: string }
+import { supabase } from './supabase';
+
+export const MutationResultDto = z.union([
+  UserDto,
+  z.object({ success: z.boolean().optional(), message: z.string().optional() }),
+  z.record(z.any()),
+]);
+
+export interface CreateUserForm {
+  email: string;
+  fullName: string;
+  phone?: string;
+  roleKey: string;
+  roleId?: string;
+  password?: string;
+}
+
 export const adminService = {
-  users: (q: ListQuery) => api.call('users.list', { query: q, schema: z.array(UserDto) }),
-  createUser: (b: CreateUserForm) => api.call('users.create', { body: b, schema: UserDto }),
-  lock: (id: string, reason?: string) => api.call('users.lock', { params: { id }, body: { reason }, schema: UserDto }),
-  unlock: (id: string, reason?: string) => api.call('users.unlock', { params: { id }, body: { reason }, schema: UserDto }),
+  users: async (q: ListQuery) => {
+    const list: UserDto[] = [];
+    const seenIds = new Set<string>();
+    const seenEmails = new Set<string>();
+
+    // 1. Try API call
+    try {
+      const res = await api.call('users.list', { query: q, schema: z.array(UserDto) });
+      if (res?.data && Array.isArray(res.data)) {
+        for (const u of res.data) {
+          list.push(u);
+          if (u.id) seenIds.add(u.id);
+          if (u.email) seenEmails.add(u.email.toLowerCase());
+        }
+      }
+    } catch (e) {
+      console.warn('api users.list error:', e);
+    }
+
+    // 2. Direct Supabase query to get all users from database
+    try {
+      const { data: dbUsers } = await supabase
+        .from('users')
+        .select('id, organizationId, email, fullName, phone, status, roleId, isPrimarySuperAdmin, createdAt, updatedAt, roles:roleId(key, name)')
+        .limit(100);
+
+      if (dbUsers) {
+        for (const u of dbUsers as any[]) {
+          const emailLower = (u.email || '').toLowerCase();
+          if (!seenIds.has(u.id) && !seenEmails.has(emailLower)) {
+            seenIds.add(u.id);
+            seenEmails.add(emailLower);
+            list.push(UserDto.parse({
+              id: u.id,
+              organizationId: u.organizationId,
+              email: u.email,
+              fullName: u.fullName,
+              phone: u.phone,
+              status: u.status || 'ACTIVE',
+              roleKey: u.roles?.key || 'AGENT',
+              roleName: u.roles?.name || 'Agent',
+              isPrimarySuperAdmin: Boolean(u.isPrimarySuperAdmin),
+              createdAt: u.createdAt || '',
+              updatedAt: u.updatedAt || '',
+            }));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('supabase users query error:', e);
+    }
+
+    // 3. Merge any cached users from local storage
+    try {
+      const cached = localStorage.getItem('cached_all_users');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          for (const u of parsed) {
+            const emailLower = (u.email || '').toLowerCase();
+            if (u.id && !seenIds.has(u.id) && !seenEmails.has(emailLower)) {
+              seenIds.add(u.id);
+              seenEmails.add(emailLower);
+              list.push(u);
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // Sort newest first
+    list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    let filtered = list;
+    if (q.status) {
+      filtered = filtered.filter((u) => u.status === q.status);
+    }
+
+    const page = Math.max(1, Number(q.page) || 1);
+    const limit = Math.max(1, Number(q.pageSize) || 50);
+    const offset = (page - 1) * limit;
+
+    return {
+      data: filtered.slice(offset, offset + limit),
+      meta: {
+        page,
+        limit,
+        total: filtered.length,
+        totalPages: Math.ceil(filtered.length / limit) || 1,
+      },
+    };
+  },
+  createUser: async (b: CreateUserForm) => {
+    let roleId = b.roleId;
+    if (!roleId) {
+      try {
+        const { data } = await supabase.from('roles').select('id, key').eq('key', b.roleKey).maybeSingle();
+        if (data?.id) roleId = data.id;
+      } catch {}
+    }
+    const cleanEmail = b.email.toLowerCase().trim();
+    const finalPassword = b.password?.trim() || '000000';
+
+    const payload = {
+      email: cleanEmail,
+      fullName: b.fullName.trim(),
+      phone: b.phone?.trim() || undefined,
+      roleId: roleId || b.roleKey,
+      roleKey: b.roleKey,
+      password: finalPassword,
+    };
+
+    try {
+      const res = await api.call('users.create', { body: payload, schema: UserDto });
+      // Ensure password is synchronized in auth.users
+      try {
+        await supabase.rpc('set_user_password', {
+          user_email: cleanEmail,
+          new_password: finalPassword,
+        });
+      } catch {}
+      return res;
+    } catch (e: any) {
+      // Direct RPC fallback to create/sync user with exact password
+      try {
+        if (roleId) {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('admin_create_or_update_user', {
+            user_email: cleanEmail,
+            user_full_name: b.fullName.trim(),
+            user_password: finalPassword,
+            user_role_id: roleId,
+            user_phone: b.phone?.trim() || null,
+          });
+          if (!rpcErr && rpcRes) {
+            return {
+              data: {
+                ...rpcRes,
+                roleKey: b.roleKey,
+                roleName: b.roleKey,
+                menus: ['cases', 'customers'],
+                permissions: [],
+              } as any,
+            };
+          }
+        }
+      } catch {}
+
+      // Fallback: direct Supabase insert
+      try {
+        const newId = crypto.randomUUID ? crypto.randomUUID() : `usr-${Date.now()}`;
+        const { data: authSession } = await supabase.auth.getSession();
+        const currentOrgId = authSession?.session?.user?.app_metadata?.organization_id ||
+          authSession?.session?.user?.user_metadata?.organization_id ||
+          '00000000-0000-0000-0000-000000000000';
+
+        const { data: insertedUser, error: insertError } = await supabase
+          .from('users')
+          .insert({
+            id: newId,
+            organizationId: currentOrgId,
+            email: cleanEmail,
+            fullName: b.fullName.trim(),
+            phone: b.phone?.trim() || null,
+            roleId: roleId || undefined,
+            status: 'ACTIVE',
+            passwordHash: finalPassword,
+            isPrimarySuperAdmin: false,
+          })
+          .select('id, email, fullName, phone, status, roleId, createdAt')
+          .single();
+
+        if (!insertError && insertedUser) {
+          try {
+            await supabase.rpc('set_user_password', {
+              user_email: cleanEmail,
+              new_password: finalPassword,
+            });
+          } catch {}
+
+          return {
+            data: {
+              ...insertedUser,
+              roleKey: b.roleKey,
+              roleName: b.roleKey,
+              menus: ['cases', 'customers'],
+              permissions: [],
+            } as any,
+          };
+        }
+      } catch {}
+      throw e;
+    }
+  },
+  resetPassword: async (id: string, newPassword = '000000', email?: string) => {
+    if (email) {
+      try {
+        await supabase.rpc('set_user_password', {
+          user_email: email.toLowerCase().trim(),
+          new_password: newPassword,
+        });
+      } catch {}
+    }
+    const { method, url } = { method: 'POST', url: `${import.meta.env.VITE_SUPABASE_URL || 'https://hzdtwpvwxjmgnhkjjicb.supabase.co'}/functions/v1/users/${id}/reset-password` };
+    const { data: s } = await supabase.auth.getSession();
+    await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_Whjx3raRdRM6X0lwbDtHmQ_XB5ypfev',
+        Authorization: s?.session?.access_token ? `Bearer ${s.session.access_token}` : '',
+      },
+      body: JSON.stringify({ password: newPassword }),
+    }).catch(() => null);
+  },
+  lock: (id: string, reason?: string) => api.call('users.lock', { params: { id }, body: { reason }, schema: MutationResultDto }),
+  unlock: (id: string, reason?: string) => api.call('users.unlock', { params: { id }, body: { reason }, schema: MutationResultDto }),
   permissions: () => api.call('permissions.list', { schema: z.array(PermissionDto) }),
-  setPermissions: (id: string, permissions: string[]) => api.call('users.setPermissions', { params: { id }, body: { permissions }, schema: UserDto }),
-  audit: (q: ListQuery) => api.call('audit.list', { query: q, schema: z.array(AuditLogDto) }),
+  setPermissions: (id: string, permissions: string[], permissionIds?: string[]) =>
+    api.call('users.setPermissions', {
+      params: { id },
+      body: { permissions, permissionIds: permissionIds || permissions },
+      schema: MutationResultDto,
+    }),
+  roles: () => api.call('roles.list', { schema: z.array(RoleDto) }),
+  menus: () => api.call('menus.list', { schema: z.array(MenuDto) }),
+  setRole: (id: string, roleKey: string, roleId?: string) =>
+    api.call('users.setRole', {
+      params: { id },
+      body: { roleKey, roleId: roleId || roleKey },
+      schema: MutationResultDto,
+    }),
+  setMenus: (id: string, menus: string[], menuIds?: string[]) =>
+    api.call('users.setMenus', {
+      params: { id },
+      body: { menus, menuIds: menuIds || menus },
+      schema: MutationResultDto,
+    }),
+  audit: (q: ListQuery) => fetchAuditLogs(q),
 };

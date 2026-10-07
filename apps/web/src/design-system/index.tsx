@@ -36,3 +36,6 @@ export function Kpis({ items, label }: { items: Array<[string, string | number]>
 }
 export const Loading = () => <div className="skeleton" style={{ height: 120 }} aria-busy="true" />;
 export const pageStyle = { padding: 24, display: 'grid', gap: 16, maxWidth: 1200, margin: '0 auto' } as const;
+
+export { THEMES, ThemeSwitcher, applyTheme, initTheme, storedTheme } from './theme';
+export { AuthLayout } from './AuthLayout';

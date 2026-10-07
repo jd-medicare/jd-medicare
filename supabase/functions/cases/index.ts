@@ -24,6 +24,35 @@ Deno.serve(async (req: Request) => {
     const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20')));
     const offset = (page - 1) * limit;
 
+    // Ensure all customers in this organization have a corresponding case row
+    const { data: missingCustomers } = await client
+      .from('customers')
+      .select('id, createdById, createdAt')
+      .eq('organizationId', user.organizationId);
+
+    if (missingCustomers && missingCustomers.length > 0) {
+      const { data: existingCases } = await client
+        .from('cases')
+        .select('customerId')
+        .eq('organizationId', user.organizationId);
+
+      const existingCustIds = new Set((existingCases || []).map((c: any) => c.customerId));
+      const toInsert = missingCustomers
+        .filter((c: any) => !existingCustIds.has(c.id))
+        .map((c: any) => ({
+          organizationId: user.organizationId,
+          customerId: c.id,
+          status: 'PENDING',
+          version: 1,
+          agentId: c.createdById || user.id,
+          submittedAt: c.createdAt || new Date().toISOString(),
+        }));
+
+      if (toInsert.length > 0) {
+        await client.from('cases').insert(toInsert);
+      }
+    }
+
     let query = client
       .from('cases')
       .select(`
@@ -31,7 +60,8 @@ Deno.serve(async (req: Request) => {
         processedAt, rejectionReason, submittedAt, createdAt, updatedAt,
         customer:customers(firstName, lastName, phone),
         callRecord:call_records(durationSeconds),
-        decision:accept_reject_actions(decision, reason, createdAt)
+        decision:accept_reject_actions(decision, reason, createdAt),
+        agent:agentId(id, fullName)
       `, { count: 'exact' })
       .eq('organizationId', user.organizationId)
       .range(offset, offset + limit - 1)

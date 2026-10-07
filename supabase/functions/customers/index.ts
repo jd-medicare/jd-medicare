@@ -55,7 +55,7 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  // POST / (create customer)
+  // POST / (create customer + case)
   if (req.method === 'POST' && (pathname === '/' || pathname === '')) {
     const permErr = requirePermission(user, 'customer:create');
     if (permErr) return permErr;
@@ -78,7 +78,8 @@ Deno.serve(async (req: Request) => {
       return errorResponse('PHONE_ALREADY_EXISTS', 'A customer with this phone number already exists.');
     }
 
-    const { data, error } = await client
+    // Insert customer
+    const { data: customer, error: customerError } = await client
       .from('customers')
       .insert({
         organizationId: user.organizationId,
@@ -94,8 +95,25 @@ Deno.serve(async (req: Request) => {
       .select()
       .single();
 
-    if (error) return errorResponse('VALIDATION_ERROR', error.message);
-    return jsonResponse({ data }, 201);
+    if (customerError || !customer) {
+      return errorResponse('VALIDATION_ERROR', customerError?.message || 'Failed to create customer');
+    }
+
+    // Automatically create corresponding case in `cases` table
+    await client
+      .from('cases')
+      .insert({
+        organizationId: user.organizationId,
+        customerId: customer.id,
+        status: 'PENDING',
+        version: 1,
+        agentId: user.id,
+        submittedAt: new Date().toISOString(),
+      })
+      .select()
+      .maybeSingle();
+
+    return jsonResponse({ data: customer }, 201);
   }
 
   // Parse ID: /:id

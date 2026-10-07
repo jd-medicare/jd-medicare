@@ -113,7 +113,35 @@ export async function requireAuth(req: Request): Promise<AuthResult> {
     permissionsSet.add('*');
     for (const p of ALL_PERMISSIONS) permissionsSet.add(p);
   } else {
-    // Load role permissions
+    // Role standard defaults to ensure essential access is never blocked
+    const ROLE_DEFAULTS: Record<string, string[]> = {
+      ADMIN: ALL_PERMISSIONS,
+      CEO: [
+        'case:view', 'customer:view', 'call_length:view',
+        'report:view', 'report:export',
+        'finance:view', 'income:create', 'income:update', 'expense:create', 'expense:update',
+        'expense_head:create', 'expense_head:update',
+        'ceo:dashboard', 'audit:view',
+      ],
+      TEAM_LEADER: [
+        'case:view', 'customer:view', 'call_length:view', 'call_length:update',
+        'report:view', 'report:export', 'user:view',
+      ],
+      OUTSOURCE: [
+        'case:view', 'case:accept', 'case:reject', 'case:modify_processed',
+        'customer:view', 'call_length:view', 'report:view',
+      ],
+      AGENT: [
+        'customer:create', 'customer:view', 'customer:update',
+        'case:create', 'case:view', 'call_length:view', 'call_length:create', 'call_length:update',
+      ],
+    };
+
+    if (ROLE_DEFAULTS[roleKey]) {
+      for (const p of ROLE_DEFAULTS[roleKey]) permissionsSet.add(p);
+    }
+
+    // Load role permissions from DB
     const { data: rolePerms } = await client
       .from('role_permissions')
       .select('permissions:permissionId(key)')

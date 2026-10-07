@@ -13,6 +13,7 @@ const NewCustomerPage = lazy(() => import('../features/agent/NewCustomerPage'));
 const CasesPage = lazy(() => import('../features/cases/CasesPage'));
 const CaseDetailPage = lazy(() => import('../features/cases/CaseDetailPage'));
 const UsersPage = lazy(() => import('../features/admin/UsersPage'));
+const TeamAgentsPage = lazy(() => import('../features/team/TeamAgentsPage'));
 const AuditPage = lazy(() => import('../features/admin/AuditPage'));
 const CeoDashboardPage = lazy(() => import('../features/ceo/CeoDashboardPage'));
 const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
@@ -41,7 +42,10 @@ function Home() {
   const to = homeFor(user);
   return to ? <Navigate to={to} replace /> : <p role="alert" style={{ padding: 24 }}>No pages are assigned to your account. Contact your administrator.</p>;
 }
+import { useLiveSyncListener } from '../services/liveSync';
+
 export function App() {
+  useLiveSyncListener();
   return (
     <BrowserRouter>
       <Suspense fallback={<Skeleton />}>
@@ -50,9 +54,10 @@ export function App() {
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/" element={<Home />} />
-          <Route path="/customers/new" element={<R nav="/customers/new">{() => <NewCustomerPage />}</R>} />
+          <Route path="/customers/new" element={<R nav="/customers/new">{(u) => <NewCustomerPage user={u} />}</R>} />
           <Route path="/cases" element={<R nav="/cases">{(u) => <CasesPage user={u} />}</R>} />
           <Route path="/cases/:id" element={<R nav="/cases">{(u) => <CaseDetailPage user={u} />}</R>} />
+          <Route path="/team/agents" element={<R nav="/team/agents">{(u) => <TeamAgentsPage user={u} />}</R>} />
           <Route path="/outsource" element={<R nav="/outsource">{(u) => <OutsourcePage user={u} />}</R>} />
           <Route path="/reports" element={<R nav="/reports">{(u) => <ReportsPage user={u} />}</R>} />
           <Route path="/ceo" element={<R nav="/ceo">{() => <CeoDashboardPage />}</R>} />

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { authService } from '../../services/auth';
 import { errorMessage } from '../../services/api-client';
-import { TextField } from '../../design-system';
+import { AuthLayout, TextField } from '../../design-system';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [sent, setSent] = useState(false);
@@ -13,8 +13,12 @@ export default function ForgotPasswordPage() {
     try { await authService.passwordForgot(email.trim()); setSent(true); } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   }
   return (
-    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: 16 }}>
-      <form className="card" onSubmit={submit} style={{ width: 'min(380px,100%)' }} noValidate>
+    <AuthLayout>
+      <form className="card" onSubmit={submit} noValidate>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <img src="/logo.png" alt="Himayat Associates" style={{ width: 38, height: 38, borderRadius: '50%', objectFit: 'contain', background: '#fff' }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--fg, #0f172a)' }}>Himayat Associates</span>
+        </div>
         <h1 style={{ margin: 0, fontSize: 22 }}>Reset your password</h1>
         {sent ? <p role="status">If an account exists for that email, a reset link has been sent. Check your inbox.</p> : (<>
           <TextField label="Email" type="email" autoComplete="username" required value={email} onChange={setEmail} />
@@ -23,6 +27,6 @@ export default function ForgotPasswordPage() {
         </>)}
         <p style={{ marginBottom: 0 }}><Link to="/login">Back to sign in</Link></p>
       </form>
-    </main>
+    </AuthLayout>
   );
 }

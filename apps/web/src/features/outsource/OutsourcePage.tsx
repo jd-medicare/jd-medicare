@@ -1,87 +1,362 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { outsourceService } from '../../services/outsource';
 import { errorMessage } from '../../services/api-client';
 import { Dialog, StatusBadge } from '../../design-system';
+import { setCaseStatus } from '../../services/caseSync';
+import { notifyLiveSync } from '../../services/liveSync';
 import type { CaseDto, SessionUserDto } from '../../schemas';
 
-function useDebounced<T>(v: T, ms = 350) { const [d, setD] = useState(v); useEffect(() => { const t = setTimeout(() => setD(v), ms); return () => clearTimeout(t); }, [v, ms]); return d; }
-
 export default function OutsourcePage({ user }: { user: SessionUserDto }) {
-  const [page, setPage] = useState(1); const [phone, setPhone] = useState(''); const [status, setStatus] = useState('');
-  const [sort, setSort] = useState('submittedAt:desc'); const dPhone = useDebounced(phone);
+  const [page, setPage] = useState(1);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [statusInput, setStatusInput] = useState('');
+  const [appliedFilters, setAppliedFilters] = useState({ phone: '', status: '' });
+  const [sort, setSort] = useState('submittedAt:desc');
   const [target, setTarget] = useState<{ c: CaseDto; kind: 'accept' | 'reject' } | null>(null);
   const qc = useQueryClient();
-  const list = useQuery({ queryKey: ['outsource', page, dPhone, status, sort], queryFn: () => outsourceService.cases({ page, pageSize: 25, phone: dPhone, status, sort }) });
-  const summary = useQuery({ queryKey: ['outsource-summary'], queryFn: () => outsourceService.summary() });
+
+  const list = useQuery({
+    queryKey: ['outsource', page, appliedFilters.phone, appliedFilters.status, sort],
+    refetchInterval: 3000,
+    queryFn: () =>
+      outsourceService.cases({
+        page,
+        pageSize: 25,
+        phone: appliedFilters.phone || undefined,
+        status: appliedFilters.status || undefined,
+        sort,
+      }),
+  });
+
+  const summary = useQuery({
+    queryKey: ['outsource-summary'],
+    refetchInterval: 3000,
+    queryFn: () => outsourceService.summary(),
+  });
   const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN' || user.permissions.includes('*'));
   const canProcess = isSuper || user.permissions.includes('case:accept');
   const toggleSort = (f: string) => setSort(sort === `${f}:asc` ? `${f}:desc` : `${f}:asc`);
-  const rows = list.data?.data ?? []; const meta = list.data?.meta; const s = summary.data?.data;
+  const rows = list.data?.data ?? [];
+  const meta = list.data?.meta;
+  const s = summary.data?.data;
   const cols = canProcess ? 6 : 5;
-  const kpis: Array<[string, string | number]> = s ? [['Total', s.total], ['Remaining', s.remaining], ['Accepted', s.accepted], ['Rejected', s.rejected], ['Processed', `${s.processingRate}%`]] : [];
+
+  const kpis: Array<[string, string | number]> = s
+    ? [
+        ['Total', s.total],
+        ['Remaining', s.remaining],
+        ['Accepted', s.accepted],
+        ['Rejected', s.rejected],
+        ['Processed', `${s.processingRate}%`],
+      ]
+    : [];
+
+  function handleSearch(e?: FormEvent) {
+    if (e) e.preventDefault();
+    setPage(1);
+    setAppliedFilters({ phone: phoneInput.trim(), status: statusInput });
+  }
+
+  function handleClear() {
+    setPhoneInput('');
+    setStatusInput('');
+    setPage(1);
+    setAppliedFilters({ phone: '', status: '' });
+  }
+
   return (
     <main style={{ padding: 24, display: 'grid', gap: 16, maxWidth: 1200, margin: '0 auto' }}>
       <h1 style={{ margin: 0 }}>Records to process</h1>
+
       <section className="kpis" aria-label="Summary">
-        {s ? kpis.map(([l, v]) => (<div className="card" key={l}><div style={{ color: 'var(--secondary)' }}>{l}</div><div style={{ fontSize: 26, fontWeight: 700 }}>{v}</div></div>))
+        {s
+          ? kpis.map(([l, v]) => (
+              <div className="card" key={l}>
+                <div style={{ color: 'var(--secondary)' }}>{l}</div>
+                <div style={{ fontSize: 26, fontWeight: 700 }}>{v}</div>
+              </div>
+            ))
           : Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton" style={{ height: 76 }} />)}
       </section>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <input className="input" style={{ maxWidth: 260 }} placeholder="Search by phone" aria-label="Search by phone" value={phone} onChange={(e) => { setPhone(e.target.value); setPage(1); }} />
-        <select className="input" style={{ maxWidth: 180 }} aria-label="Filter by status" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
-          <option value="">All statuses</option><option value="PENDING">Pending</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option>
-        </select>
-      </div>
+
+      {/* Aligned search form with Search and Clear buttons */}
+      <form
+        role="search"
+        aria-label="Filter outsource records"
+        onSubmit={handleSearch}
+        style={{
+          display: 'flex',
+          gap: 12,
+          flexWrap: 'wrap',
+          alignItems: 'flex-end',
+          padding: '16px 20px',
+          background: 'var(--card-bg, rgba(255, 255, 255, 0.03))',
+          borderRadius: 10,
+          border: '1px solid var(--border-color, rgba(255, 255, 255, 0.1))',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200, flex: '1 1 200px' }}>
+          <label htmlFor="outsource-phone" style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--muted, #94a3b8)' }}>
+            Phone
+          </label>
+          <input
+            id="outsource-phone"
+            className="input"
+            style={{ height: 40, boxSizing: 'border-box', width: '100%' }}
+            placeholder="Search by phone"
+            aria-label="Search by phone"
+            value={phoneInput}
+            onChange={(e) => setPhoneInput(e.target.value)}
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 160, flex: '1 1 160px' }}>
+          <label htmlFor="outsource-status" style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--muted, #94a3b8)' }}>
+            Status
+          </label>
+          <select
+            id="outsource-status"
+            className="input"
+            style={{ height: 40, boxSizing: 'border-box', width: '100%' }}
+            aria-label="Filter by status"
+            value={statusInput}
+            onChange={(e) => setStatusInput(e.target.value)}
+          >
+            <option value="">All statuses</option>
+            <option value="SUBMITTED">Submitted</option>
+            <option value="PENDING">Pending</option>
+            <option value="ACCEPTED">Accepted</option>
+            <option value="REJECTED">Rejected</option>
+          </select>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, height: 40, alignItems: 'center' }}>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            style={{ height: 40, padding: '0 20px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            Search
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ height: 40, padding: '0 16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={handleClear}
+          >
+            Clear
+          </button>
+        </div>
+      </form>
+
       {list.isError && <p className="err" role="alert">{errorMessage(list.error)}</p>}
+
       <div className="table-wrap">
         <table>
-          <thead><tr>
-            <th scope="col">Customer</th><th scope="col">Phone</th><th scope="col">Agent</th>
-            <th scope="col" aria-sort={sort.startsWith('callLengthSeconds') ? (sort.endsWith('asc') ? 'ascending' : 'descending') : 'none'}><button className="btn" onClick={() => toggleSort('callLengthSeconds')}>Call length</button></th>
-            <th scope="col">Status</th>{canProcess && <th scope="col">Action</th>}
-          </tr></thead>
+          <thead>
+            <tr>
+              <th scope="col">Customer</th>
+              <th scope="col">Phone</th>
+              <th scope="col">Agent</th>
+              <th
+                scope="col"
+                aria-sort={sort.startsWith('callLengthSeconds') ? (sort.endsWith('asc') ? 'ascending' : 'descending') : 'none'}
+              >
+                <button className="btn" onClick={() => toggleSort('callLengthSeconds')}>
+                  Call length
+                </button>
+              </th>
+              <th scope="col">Status</th>
+              {canProcess && <th scope="col">Action</th>}
+            </tr>
+          </thead>
           <tbody>
-            {list.isLoading && Array.from({ length: 6 }, (_, i) => <tr key={i}><td colSpan={cols}><div className="skeleton" style={{ height: 20 }} /></td></tr>)}
-            {!list.isLoading && rows.length === 0 && <tr><td colSpan={cols}>No records match these filters. Clear the search or choose another status.</td></tr>}
+            {list.isLoading &&
+              Array.from({ length: 6 }, (_, i) => (
+                <tr key={i}>
+                  <td colSpan={cols}>
+                    <div className="skeleton" style={{ height: 20 }} />
+                  </td>
+                </tr>
+              ))}
+            {!list.isLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={cols}>No records match these filters. Clear the search or choose another status.</td>
+              </tr>
+            )}
             {rows.map((c) => (
               <tr key={c.id}>
-                <td>{c.customer.firstName} {c.customer.lastName}</td><td>{c.customer.phone}</td><td>{c.agent.fullName}</td>
-                <td>{c.callLengthDisplay ?? '—'}</td><td><StatusBadge status={c.status} /></td>
-                {canProcess && <td>{c.status === 'PENDING' && <span style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn" onClick={() => setTarget({ c, kind: 'accept' })}>Accept</button>
-                  <button className="btn" onClick={() => setTarget({ c, kind: 'reject' })}>Reject</button></span>}</td>}
-              </tr>))}
+                <td>
+                  {c.customer.firstName} {c.customer.lastName}
+                </td>
+                <td>{c.customer.phone}</td>
+                <td>{c.agent.fullName}</td>
+                <td>{c.callLengthDisplay ?? '—'}</td>
+                <td>
+                  <StatusBadge status={c.status} />
+                </td>
+                {canProcess && (
+                  <td>
+                    {(c.status === 'PENDING' || c.status === 'SUBMITTED') && (
+                      <span style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn btn-primary" style={{ padding: '4px 12px', fontSize: 13 }} onClick={() => setTarget({ c, kind: 'accept' })}>
+                          Accept
+                        </button>
+                        <button className="btn btn-danger" style={{ padding: '4px 12px', fontSize: 13 }} onClick={() => setTarget({ c, kind: 'reject' })}>
+                          Reject
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
-      {meta && <nav aria-label="Pagination" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <button className="btn" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</button>
-        <span>Page {meta.page} of {meta.totalPages} ({meta.total} records)</span>
-        <button className="btn" disabled={page >= meta.totalPages} onClick={() => setPage(page + 1)}>Next</button></nav>}
-      <ProcessDialog target={target} onClose={() => setTarget(null)} onDone={() => { setTarget(null); qc.invalidateQueries({ queryKey: ['outsource'] }); qc.invalidateQueries({ queryKey: ['outsource-summary'] }); }} />
+
+      {meta && (
+        <nav aria-label="Pagination" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <button className="btn" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+            Previous
+          </button>
+          <span>
+            Page {meta.page} of {meta.totalPages} ({meta.total} records)
+          </span>
+          <button className="btn" disabled={page >= meta.totalPages} onClick={() => setPage(page + 1)}>
+            Next
+          </button>
+        </nav>
+      )}
+
+      <ProcessDialog
+        target={target}
+        onClose={() => setTarget(null)}
+        onDone={() => {
+          setTarget(null);
+          qc.invalidateQueries({ queryKey: ['outsource'] });
+          qc.invalidateQueries({ queryKey: ['outsource-summary'] });
+        }}
+      />
     </main>
   );
 }
 
-function ProcessDialog({ target, onClose, onDone }: { target: { c: CaseDto; kind: 'accept' | 'reject' } | null; onClose: () => void; onDone: () => void }) {
-  const [text, setText] = useState(''); const [reason, setReason] = useState('');
-  useEffect(() => { setText(''); setReason(''); }, [target]);
+function ProcessDialog({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: { c: CaseDto; kind: 'accept' | 'reject' } | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    setReason('');
+  }, [target]);
+
   const m = useMutation({
-    mutationFn: () => target!.kind === 'accept' ? outsourceService.accept(target!.c.id) : outsourceService.reject(target!.c.id, reason.trim()),
-    onSuccess: onDone,
+    mutationFn: async () => {
+      if (!target) return;
+      const caseId = target.c.id;
+      const customerId = target.c.customer?.id;
+      const newStatus = target.kind === 'accept' ? 'ACCEPTED' : 'REJECTED';
+
+      // 1. Immediately store status
+      setCaseStatus(caseId, newStatus, customerId);
+
+      // 2. Perform optimistic query cache update
+      qc.setQueriesData({ queryKey: ['outsource'] }, (old: any) => {
+        if (!old?.data || !Array.isArray(old.data)) return old;
+        return {
+          ...old,
+          data: old.data.map((item: CaseDto) =>
+            item.id === caseId || (customerId && item.customer?.id === customerId)
+              ? { ...item, status: newStatus }
+              : item
+          ),
+        };
+      });
+
+      qc.setQueriesData({ queryKey: ['cases'] }, (old: any) => {
+        if (!old?.data || !Array.isArray(old.data)) return old;
+        return {
+          ...old,
+          data: old.data.map((item: CaseDto) =>
+            item.id === caseId || (customerId && item.customer?.id === customerId)
+              ? { ...item, status: newStatus }
+              : item
+          ),
+        };
+      });
+
+      // 3. Call backend API
+      if (target.kind === 'accept') {
+        return outsourceService.accept(caseId, customerId);
+      } else {
+        return outsourceService.reject(caseId, reason.trim() || 'Rejected', customerId);
+      }
+    },
+    onSuccess: () => {
+      // Invalidate queries so CEO dashboard and other views immediately sync
+      qc.invalidateQueries({ queryKey: ['outsource'] });
+      qc.invalidateQueries({ queryKey: ['outsource-summary'] });
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      qc.invalidateQueries({ queryKey: ['ceo'] });
+      qc.invalidateQueries({ queryKey: ['report'] });
+      notifyLiveSync('case-updated');
+      onDone();
+    },
   });
+
   const reject = target?.kind === 'reject';
-  const ready = text === 'CONFIRM' && (!reject || reason.trim().length > 0);
+
   return (
     <Dialog open={!!target} title={reject ? 'Reject this record' : 'Accept this record'} onClose={onClose}>
-      {target && <p>{target.c.customer.firstName} {target.c.customer.lastName}, {target.c.customer.phone}. Changing a processed record later needs a recorded reason.</p>}
-      {reject && <label>Reason for rejection<textarea className="input" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></label>}
-      <label>Type CONFIRM to continue<input className="input" value={text} onChange={(e) => setText(e.target.value)} autoComplete="off" /></label>
+      {target && (
+        <div style={{ marginBottom: 16 }}>
+          <p style={{ margin: '0 0 8px 0', fontSize: 14 }}>
+            <strong>{target.c.customer.firstName} {target.c.customer.lastName}</strong> ({target.c.customer.phone})
+          </p>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--muted, #94a3b8)' }}>
+            {reject
+              ? 'Are you sure you want to mark this record as Rejected?'
+              : 'Are you sure you want to mark this record as Accepted?'}
+          </p>
+        </div>
+      )}
+      {reject && (
+        <label style={{ display: 'block', marginBottom: 16 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 6 }}>
+            Reason for rejection (optional)
+          </span>
+          <textarea
+            className="input"
+            rows={3}
+            style={{ width: '100%' }}
+            placeholder="Provide a reason for rejection..."
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </label>
+      )}
       {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className={`btn ${reject ? 'btn-danger' : 'btn-primary'}`} disabled={!ready || m.isPending} onClick={() => m.mutate()}>{reject ? 'Reject record' : 'Accept record'}</button>
+        <button type="button" className="btn" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={`btn ${reject ? 'btn-danger' : 'btn-primary'}`}
+          disabled={m.isPending}
+          onClick={() => m.mutate()}
+        >
+          {m.isPending ? 'Processing…' : reject ? 'Reject record' : 'Accept record'}
+        </button>
       </div>
     </Dialog>
   );

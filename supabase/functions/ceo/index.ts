@@ -31,6 +31,35 @@ Deno.serve(async (req: Request) => {
     const dateFrom = qFrom || firstDay;
     const dateTo = qTo || today;
 
+    // Ensure all customers in this organization have a corresponding case row
+    const { data: allCustomers } = await client
+      .from('customers')
+      .select('id, createdById, createdAt')
+      .eq('organizationId', user.organizationId);
+
+    if (allCustomers && allCustomers.length > 0) {
+      const { data: existingCases } = await client
+        .from('cases')
+        .select('customerId')
+        .eq('organizationId', user.organizationId);
+
+      const existingCustIds = new Set((existingCases || []).map((c: any) => c.customerId));
+      const toInsert = allCustomers
+        .filter((c: any) => !existingCustIds.has(c.id))
+        .map((c: any) => ({
+          organizationId: user.organizationId,
+          customerId: c.id,
+          status: 'PENDING',
+          version: 1,
+          agentId: c.createdById || user.id,
+          submittedAt: c.createdAt || new Date().toISOString(),
+        }));
+
+      if (toInsert.length > 0) {
+        await client.from('cases').insert(toInsert);
+      }
+    }
+
     // Fetch cases
     const { data: cases } = await client
       .from('cases')

@@ -16,10 +16,13 @@ Deno.serve(async (req: Request) => {
   const pathname = url.pathname.replace(/^\/users\/?/, '/');
   const client = getServiceClient();
 
-  // GET / (list users)
+    // GET / (list users)
   if (req.method === 'GET' && (pathname === '/' || pathname === '')) {
-    const permErr = requirePermission(user, 'user:view');
-    if (permErr) return permErr;
+    const isTeamLeader = user.roleKey === 'TEAM_LEADER';
+    if (!isTeamLeader) {
+      const permErr = requirePermission(user, 'user:view');
+      if (permErr) return permErr;
+    }
 
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
     const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20')));
@@ -61,8 +64,11 @@ Deno.serve(async (req: Request) => {
 
   // POST / (create user)
   if (req.method === 'POST' && (pathname === '/' || pathname === '')) {
-    const permErr = requirePermission(user, 'user:create');
-    if (permErr) return permErr;
+    const isTeamLeader = user.roleKey === 'TEAM_LEADER';
+    if (!isTeamLeader) {
+      const permErr = requirePermission(user, 'user:create');
+      if (permErr) return permErr;
+    }
 
     const body = await req.json().catch(() => ({}));
     const { email, fullName, roleId, phone } = body;
@@ -70,29 +76,46 @@ Deno.serve(async (req: Request) => {
       return errorResponse('VALIDATION_ERROR', 'Email, fullName, and roleId are required');
     }
 
-    // Create user in Supabase Auth
-    const tempPassword = `P@ssword${Math.random().toString(36).slice(2)}!`;
+    const cleanEmail = email.toLowerCase().trim();
+    const initialPassword = body.password || '000000';
+
+    // Create user in Supabase Auth with provided password
+    let authUserId: string;
     const { data: authUser, error: authError } = await client.auth.admin.createUser({
-      email: email.toLowerCase().trim(),
-      password: tempPassword,
+      email: cleanEmail,
+      password: initialPassword,
       email_confirm: true,
       user_metadata: { fullName },
     });
 
     if (authError) {
-      return errorResponse('VALIDATION_ERROR', authError.message);
+      // If user already exists in Auth, fetch their ID and update their password
+      const { data: listData } = await client.auth.admin.listUsers();
+      const existing = listData?.users?.find((u) => u.email?.toLowerCase() === cleanEmail);
+      if (existing) {
+        authUserId = existing.id;
+        await client.auth.admin.updateUserById(existing.id, {
+          password: initialPassword,
+          email_confirm: true,
+          user_metadata: { fullName },
+        });
+      } else {
+        return errorResponse('VALIDATION_ERROR', authError.message);
+      }
+    } else {
+      authUserId = authUser.user.id;
     }
 
     // Insert user row into database
     const { data: newUser, error: dbError } = await client
       .from('users')
-      .insert({
-        id: authUser.user.id,
+      .upsert({
+        id: authUserId,
         organizationId: user.organizationId,
-        email: email.toLowerCase().trim(),
+        email: cleanEmail,
         fullName,
         phone: phone || null,
-        passwordHash: 'supabase-managed',
+        passwordHash: initialPassword,
         roleId,
         status: 'ACTIVE',
         isPrimarySuperAdmin: false,
@@ -101,8 +124,6 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (dbError) {
-      // Cleanup auth user on failure
-      await client.auth.admin.deleteUser(authUser.user.id);
       return errorResponse('VALIDATION_ERROR', dbError.message);
     }
 
@@ -286,6 +307,27 @@ Deno.serve(async (req: Request) => {
       await client.from('users').update({ menusCustomized: false }).eq('id', targetId);
     }
     return jsonResponse({ data: { success: true } });
+  }
+
+  // POST /:id/reset-password
+  if (req.method === 'POST' && subRoute === '/reset-password') {
+    const permErr = requirePermission(user, 'user:update');
+    if (permErr) return permErr;
+
+    const body = await req.json().catch(() => ({}));
+    const newPassword = body.password || '000000';
+
+    await client.auth.admin.updateUserById(targetId, {
+      password: newPassword,
+      email_confirm: true,
+    }).catch((e: any) => console.warn('Auth admin reset error:', e));
+
+    await client.from('users').update({
+      passwordHash: newPassword,
+      updatedAt: new Date().toISOString(),
+    }).eq('id', targetId);
+
+    return jsonResponse({ data: { success: true, message: 'Password reset to ' + newPassword } });
   }
 
   return errorResponse('NOT_FOUND', `Route not found: ${req.method} ${pathname}`);

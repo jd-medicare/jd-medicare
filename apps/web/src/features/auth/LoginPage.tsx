@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { authService } from '../../services/auth';
 import { errorMessage } from '../../services/api-client';
+import { AuthLayout } from '../../design-system';
 
 export default function LoginPage() {
   const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
@@ -18,8 +19,12 @@ export default function LoginPage() {
     } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   }
   return (
-    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: 16 }}>
-      <form className="card" onSubmit={submit} style={{ width: 'min(380px,100%)' }} noValidate>
+    <AuthLayout>
+      <form className="card" onSubmit={submit} noValidate>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <img src="/logo.png" alt="Himayat Associates" style={{ width: 38, height: 38, borderRadius: '50%', objectFit: 'contain', background: '#fff' }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--fg, #0f172a)' }}>Himayat Associates</span>
+        </div>
         <h1 style={{ margin: 0, fontSize: 22 }}>{mfa ? 'Verify your sign-in' : 'Sign in'}</h1>
         {!mfa ? (<>
           <label>Email<input className="input" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
@@ -31,6 +36,6 @@ export default function LoginPage() {
         <button className="btn btn-primary" style={{ marginTop: 16, width: '100%' }} disabled={busy}>{mfa ? 'Verify code' : 'Sign in'}</button>
         {!mfa && <p style={{ marginBottom: 0 }}><Link to="/forgot-password">Forgot your password?</Link></p>}
       </form>
-    </main>
+    </AuthLayout>
   );
 }

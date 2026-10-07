@@ -25,10 +25,26 @@ export const ERROR_TEXT: Record<string, string> = {
   PROTECTED_USER: 'This account is protected and cannot be changed.',
   MFA_REQUIRED: 'Enter your verification code to continue.',
   INVALID_CREDENTIALS: 'Email or password is incorrect.',
+  SCHEMA_MISMATCH: 'The server response did not match the expected format.',
+  RESPONSE_MISMATCH: 'The action may have been saved, but this screen could not read the reply. Refresh the page to check.',
+  UNKNOWN: 'Something went wrong. Try again.',
 };
 
-export const errorMessage = (e: unknown) =>
-  e instanceof ApiError ? ERROR_TEXT[e.code] ?? e.message : 'Something went wrong. Try again.';
+export const errorMessage = (e: unknown) => {
+  if (e instanceof ApiError) {
+    if (e.code === 'VALIDATION_ERROR') {
+      return e.message || ERROR_TEXT[e.code];
+    }
+    return ERROR_TEXT[e.code] ?? e.message;
+  }
+  if (e instanceof z.ZodError) {
+    return `Response validation error: ${e.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join(', ')}`;
+  }
+  if (e instanceof Error && e.message) {
+    return e.message;
+  }
+  return 'Something went wrong. Try again.';
+};
 
 type Query = Record<string, string | number | undefined>;
 
@@ -127,16 +143,23 @@ async function send(key: string, o: { params?: Record<string, string>; query?: Q
   return json;
 }
 
+let csrfToken: string | null = null;
+
 export const api = {
   async call<T extends z.ZodTypeAny>(
     key: string,
     o: CallOptions<T> & { schema: T }
   ): Promise<{ data: z.infer<T>; meta?: z.infer<typeof Meta> }> {
     const json = await send(key, o);
-    return z.object({ data: o.schema, meta: z.any().optional() }).parse(json) as unknown as {
-      data: z.infer<T>;
-      meta?: z.infer<typeof Meta>;
-    };
+    const r = z.object({ data: o.schema, meta: z.any().optional() }).safeParse(json);
+    if (r.success) return r.data as { data: z.infer<T>; meta?: z.infer<typeof Meta> };
+    const first = r.error.issues[0];
+    if (import.meta.env.DEV) {
+      console.error(`RESPONSE CONTRACT MISMATCH ${key} at "${first.path.join('.')}": ${first.message}`, { issues: r.error.issues, received: json });
+    }
+    throw new ApiError('RESPONSE_MISMATCH', `Unexpected response shape for ${key}`, undefined, 200);
   },
-  resetCsrf() {},
+  resetCsrf() {
+    csrfToken = null;
+  },
 };

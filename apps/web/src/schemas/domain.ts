@@ -2,35 +2,185 @@
 import { z } from 'zod';
 import { CaseDto, CustomerDto } from './index';
 
-export const CustomerCreateResult = z.object({ customer: CustomerDto, case: CaseDto });
+export const CustomerCreateResult = z.union([
+  z.object({ customer: CustomerDto, case: CaseDto.optional() }),
+  CustomerDto.transform((customer) => ({ customer, case: undefined })),
+]);
+export type CustomerCreateResult = z.infer<typeof CustomerCreateResult>;
 export const UserStatus = z.enum(['INVITED', 'ACTIVE', 'LOCKED', 'SUSPENDED', 'DISABLED']);
-export const UserDto = z.object({
-  id: z.string(), email: z.string(), fullName: z.string(), phone: z.string().nullable(), status: UserStatus, roleKey: z.string(),
-  permissions: z.array(z.string()), menus: z.array(z.string()), lastLoginAt: z.string().nullable(), createdAt: z.string(),
-});
+export const UserDto = z
+  .object({
+    id: z.string(),
+    email: z.string(),
+    fullName: z.string(),
+    phone: z.string().nullable().optional(),
+    status: UserStatus,
+    roleKey: z.string().optional(),
+    role: z.string().optional(),
+    permissions: z.array(z.string()).nullish().default([]),
+    menus: z.array(z.string()).nullish().default([]),
+    isPrimarySuperAdmin: z.boolean().optional(),
+    lastLoginAt: z.string().nullable().optional(),
+    createdAt: z.string().optional(),
+  })
+  .transform((u) => ({
+    id: u.id,
+    email: u.email,
+    fullName: u.fullName,
+    phone: u.phone ?? null,
+    status: u.status,
+    roleKey: u.roleKey || u.role || 'AGENT',
+    isPrimarySuperAdmin: Boolean(u.isPrimarySuperAdmin || u.roleKey === 'PRIMARY_SUPER_ADMIN' || u.role === 'PRIMARY_SUPER_ADMIN'),
+    permissions: u.permissions ?? [],
+    menus: u.menus ?? [],
+    lastLoginAt: u.lastLoginAt ?? null,
+    createdAt: u.createdAt || '',
+  }));
 export type UserDto = z.infer<typeof UserDto>;
-export const PermissionDto = z.object({ key: z.string(), description: z.string() });
-export const AuditLogDto = z.object({
-  id: z.string(), event: z.string(), actor: z.object({ id: z.string(), fullName: z.string() }).nullable(), entityType: z.string(),
-  entityId: z.string(), at: z.string(), requestId: z.string(),
-  before: z.record(z.unknown()).nullable(), after: z.record(z.unknown()).nullable(),
-});
+export const PermissionDto = z.object({
+  id: z.string().optional(),
+  key: z.string(),
+  description: z.string().nullish().default(''),
+}).transform((p) => ({
+  id: p.id || p.key,
+  key: p.key,
+  description: p.description || p.key,
+}));
+export type PermissionDto = z.infer<typeof PermissionDto>;
+
+export const RoleDto = z
+  .object({
+    id: z.string().optional(),
+    key: z.string(),
+    name: z.string().optional(),
+    permissions: z.array(z.string()).nullish().default([]),
+    permissionIds: z.array(z.string()).nullish().default([]),
+    menus: z.array(z.string()).nullish().default([]),
+    menuIds: z.array(z.string()).nullish().default([]),
+  })
+  .transform((r) => ({
+    id: r.id || r.key,
+    key: r.key,
+    name: r.name || r.key,
+    permissions: (r.permissions && r.permissions.length ? r.permissions : r.permissionIds) ?? [],
+    menus: (r.menus && r.menus.length ? r.menus : r.menuIds) ?? [],
+  }));
+export type RoleDto = z.infer<typeof RoleDto>;
+
+export const MenuDto = z
+  .object({
+    id: z.string().optional(),
+    key: z.string(),
+  })
+  .transform((m) => ({
+    id: m.id || m.key,
+    key: m.key,
+  }));
+export type MenuDto = z.infer<typeof MenuDto>;
+export const AuditLogDto = z
+  .object({
+    id: z.string(),
+    event: z.string(),
+    actor: z.object({ id: z.string(), fullName: z.string() }).nullable().optional(),
+    actorId: z.string().nullable().optional(),
+    entityType: z.string(),
+    entityId: z.string(),
+    at: z.string().optional(),
+    createdAt: z.string().optional(),
+    requestId: z.string().nullable().optional(),
+    before: z.record(z.unknown()).nullable().optional(),
+    after: z.record(z.unknown()).nullable().optional(),
+  })
+  .transform((a) => ({
+    id: a.id,
+    event: a.event,
+    actor: a.actor ?? (a.actorId ? { id: a.actorId, fullName: 'User' } : null),
+    entityType: a.entityType,
+    entityId: a.entityId,
+    at: a.at || a.createdAt || '',
+    requestId: a.requestId || '—',
+    before: a.before ?? null,
+    after: a.after ?? null,
+  }));
+export type AuditLogDto = z.infer<typeof AuditLogDto>;
 const Ref = z.object({ id: z.string(), fullName: z.string() });
 const FinanceStatus = z.enum(['ACTIVE', 'VOIDED']);
-export const IncomeDto = z.object({
-  id: z.string(), amount: z.string(), currency: z.string(), date: z.string(), category: z.string(), reference: z.string().nullable(),
-  description: z.string().nullable(), relatedCaseId: z.string().nullable(), status: FinanceStatus, createdBy: Ref, createdAt: z.string(),
-});
-export const ExpenseDto = z.object({
-  id: z.string(), expenseHeadId: z.string(), expenseHeadName: z.string(), amount: z.string(), currency: z.string(), date: z.string(),
-  payee: z.string().nullable(), reference: z.string().nullable(), description: z.string().nullable(), status: FinanceStatus,
-  createdBy: Ref, createdAt: z.string(),
-});
+export const IncomeDto = z
+  .object({
+    id: z.string(),
+    amount: z.union([z.string(), z.number()]).transform(String),
+    currency: z.string().nullish().default('PKR'),
+    date: z.string(),
+    category: z.string(),
+    reference: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    relatedCaseId: z.string().nullable().optional(),
+    status: FinanceStatus.nullish().default('ACTIVE'),
+    createdBy: Ref.optional(),
+    createdById: z.string().optional(),
+    createdAt: z.string().optional(),
+  })
+  .transform((i) => ({
+    id: i.id,
+    amount: i.amount,
+    currency: i.currency || 'PKR',
+    date: i.date,
+    category: i.category,
+    reference: i.reference ?? null,
+    description: i.description ?? null,
+    relatedCaseId: i.relatedCaseId ?? null,
+    status: (i.status || 'ACTIVE') as z.infer<typeof FinanceStatus>,
+    createdBy: i.createdBy ?? { id: i.createdById || '', fullName: 'Staff' },
+    createdAt: i.createdAt || '',
+  }));
+export type IncomeDto = z.infer<typeof IncomeDto>;
+export const ExpenseDto = z
+  .object({
+    id: z.string(),
+    expenseHeadId: z.string().optional(),
+    expenseHeadName: z.string().optional(),
+    expenseHead: z.object({ name: z.string() }).optional(),
+    amount: z.union([z.string(), z.number()]).transform(String),
+    currency: z.string().nullish().default('PKR'),
+    date: z.string(),
+    payee: z.string().nullable().optional(),
+    reference: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    status: FinanceStatus.nullish().default('ACTIVE'),
+    createdBy: Ref.optional(),
+    createdById: z.string().optional(),
+    createdAt: z.string().optional(),
+  })
+  .transform((e) => ({
+    id: e.id,
+    expenseHeadId: e.expenseHeadId || '',
+    expenseHeadName: e.expenseHeadName || e.expenseHead?.name || 'Expense',
+    amount: e.amount,
+    currency: e.currency || 'PKR',
+    date: e.date,
+    payee: e.payee ?? null,
+    reference: e.reference ?? null,
+    description: e.description ?? null,
+    status: (e.status || 'ACTIVE') as z.infer<typeof FinanceStatus>,
+    createdBy: e.createdBy ?? { id: e.createdById || '', fullName: 'Staff' },
+    createdAt: e.createdAt || '',
+  }));
+export type ExpenseDto = z.infer<typeof ExpenseDto>;
 export const ExpenseHeadDto = z.object({ id: z.string(), name: z.string(), isActive: z.boolean() });
-export const ExportDto = z.object({
-  id: z.string(), reportType: z.string(), format: z.string(), status: z.enum(['QUEUED', 'RUNNING', 'READY', 'FAILED']),
-  downloadUrl: z.string().nullable(), expiresAt: z.string().nullable(),
-});
+export const ExportDto = z
+  .object({
+    id: z.string(),
+    reportType: z.string(),
+    format: z.string(),
+    status: z.enum(['QUEUED', 'RUNNING', 'READY', 'FAILED']),
+    downloadUrl: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+  })
+  .transform((e) => ({
+    ...e,
+    downloadUrl: e.downloadUrl ?? null,
+    expiresAt: e.expiresAt ?? null,
+  }));
 const Bucket = { total: z.number(), accepted: z.number(), rejected: z.number(), pending: z.number() };
 // `rows` are only needed for export, so they are not parsed in detail here.
 export const OutsourceReport = z.object({

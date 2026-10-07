@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { authService } from '../../services/auth';
 import { errorMessage } from '../../services/api-client';
-import { TextField } from '../../design-system';
+import { AuthLayout, TextField } from '../../design-system';
 
 export default function ResetPasswordPage() {
   const token = useSearchParams()[0].get('token') ?? '';
@@ -16,8 +16,12 @@ export default function ResetPasswordPage() {
     try { await authService.passwordReset(token, pw); setDone(true); } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   }
   return (
-    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: 16 }}>
-      <form className="card" onSubmit={submit} style={{ width: 'min(380px,100%)' }} noValidate>
+    <AuthLayout>
+      <form className="card" onSubmit={submit} noValidate>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <img src="/logo.png" alt="Himayat Associates" style={{ width: 38, height: 38, borderRadius: '50%', objectFit: 'contain', background: '#fff' }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--fg, #0f172a)' }}>Himayat Associates</span>
+        </div>
         <h1 style={{ margin: 0, fontSize: 22 }}>Choose a new password</h1>
         {!token ? <p className="err" role="alert">This reset link is missing its token. Request a new link.</p>
           : done ? <p role="status">Your password was changed. You can now sign in.</p> : (<>
@@ -28,6 +32,6 @@ export default function ResetPasswordPage() {
         </>)}
         <p style={{ marginBottom: 0 }}>{!token ? <Link to="/forgot-password">Request a new link</Link> : <Link to="/login">Back to sign in</Link>}</p>
       </form>
-    </main>
+    </AuthLayout>
   );
 }

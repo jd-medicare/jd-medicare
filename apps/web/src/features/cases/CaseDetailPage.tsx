@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { caseService } from '../../services/cases';
 import { errorMessage } from '../../services/api-client';
+import { recordAudit } from '../../services/audit';
 import { Loading, StatusBadge, TextField, pageStyle } from '../../design-system';
 import { fmtDateTime, parseDuration } from '../../lib/format';
 import type { SessionUserDto } from '../../schemas';
@@ -32,26 +33,154 @@ export default function CaseDetailPage({ user }: { user: SessionUserDto }) {
   );
 }
 
+import { formatCallSeconds } from '../../services/caseSync';
+import { Dialog } from '../../design-system';
+
 function CallLengthForm({ caseId, current }: { caseId: string; current: string | null }) {
-  const [v, setV] = useState(current ?? ''); const [err, setErr] = useState(''); const qc = useQueryClient();
+  const [v, setV] = useState(current ?? '');
+  const [err, setErr] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [pendingDuration, setPendingDuration] = useState<number | null>(null);
+  const qc = useQueryClient();
+
   useEffect(() => setV(current ?? ''), [current]);
+
   const m = useMutation({
     mutationFn: (s: number) => caseService.setCallLength(caseId, s),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['case', caseId] }); qc.invalidateQueries({ queryKey: ['cases'] }); },
+    onSuccess: (_, s) => {
+      // Directly update cache on the spot so no refresh is needed
+      qc.setQueryData(['case', caseId], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: {
+            ...old.data,
+            callLengthSeconds: s,
+            callLengthDisplay: formatCallSeconds(s),
+          },
+        };
+      });
+      qc.setQueriesData({ queryKey: ['cases'] }, (old: any) => {
+        if (!old?.data || !Array.isArray(old.data)) return old;
+        return {
+          ...old,
+          data: old.data.map((item: any) => {
+            if (item.id === caseId || item.customer?.id === caseId) {
+              return {
+                ...item,
+                callLengthSeconds: s,
+                callLengthDisplay: formatCallSeconds(s),
+              };
+            }
+            return item;
+          }),
+        };
+      });
+      qc.invalidateQueries({ queryKey: ['case', caseId] });
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      recordAudit('CALL_LENGTH_UPDATED', 'case', caseId, {
+        durationSeconds: s,
+        formatted: formatCallSeconds(s),
+      });
+      setConfirmOpen(false);
+      setConfirmText('');
+      setPendingDuration(null);
+    },
   });
+
   function submit(e: FormEvent) {
-    e.preventDefault(); m.reset();
+    e.preventDefault();
+    m.reset();
     const s = parseDuration(v);
-    if (s === null) { setErr('Use hh:mm:ss, for example 00:05:42. Minutes and seconds are 00 to 59.'); return; }
-    setErr(''); m.mutate(s);
+    if (s === null) {
+      setErr('Enter duration in seconds (e.g. 120), or mm:ss (e.g. 02:00), or hh:mm:ss (e.g. 00:05:42).');
+      return;
+    }
+    setErr('');
+
+    // If call length was already set, require typing 'yes' to edit
+    if (current && current.trim() && current !== 'Not set') {
+      setPendingDuration(s);
+      setConfirmText('');
+      setConfirmOpen(true);
+      return;
+    }
+
+    m.mutate(s);
   }
+
+  function handleConfirmEdit() {
+    if (confirmText.trim().toLowerCase() !== 'yes') return;
+    if (pendingDuration !== null) {
+      m.mutate(pendingDuration);
+    }
+  }
+
   return (
-    <form className="card" onSubmit={submit} noValidate style={{ maxWidth: 360 }} aria-label="Set call length">
-      <h2 style={{ margin: 0, fontSize: 18 }}>Call length</h2>
-      <TextField label="Call length (hh:mm:ss)" placeholder="00:05:42" inputMode="numeric" autoComplete="off" value={v} onChange={setV} error={err} />
-      {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
-      {m.isSuccess && <p role="status">Call length saved.</p>}
-      <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={m.isPending}>Save call length</button>
-    </form>
+    <>
+      <form className="card" onSubmit={submit} noValidate style={{ maxWidth: 420 }} aria-label="Set call length">
+        <h2 style={{ margin: 0, fontSize: 18 }}>Call length</h2>
+        <TextField
+          label="Call duration (seconds like 120, or mm:ss, or hh:mm:ss)"
+          placeholder="e.g. 120 or 02:00 or 00:05:42"
+          autoComplete="off"
+          value={v}
+          onChange={setV}
+          error={err}
+        />
+        {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
+        {m.isSuccess && <p role="status" style={{ color: 'var(--success, #16a34a)', fontWeight: 600 }}>✓ Call length saved.</p>}
+        <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={m.isPending}>
+          {m.isPending ? 'Saving…' : 'Save call length'}
+        </button>
+      </form>
+
+      {/* Confirmation Dialog requiring typing 'yes' to edit existing call length */}
+      <Dialog
+        open={confirmOpen}
+        title="Confirm call length change"
+        onClose={() => {
+          setConfirmOpen(false);
+          setPendingDuration(null);
+        }}
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <p style={{ margin: 0 }}>
+            This case already has a recorded call length of <strong>{current}</strong>.
+          </p>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--muted, #94a3b8)' }}>
+            To confirm this change, type <strong>yes</strong> below:
+          </p>
+          <input
+            className="input"
+            autoFocus
+            placeholder="Type 'yes' to confirm"
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setConfirmOpen(false);
+                setPendingDuration(null);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={confirmText.trim().toLowerCase() !== 'yes' || m.isPending}
+              onClick={handleConfirmEdit}
+            >
+              {m.isPending ? 'Updating…' : 'Confirm & update'}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+    </>
   );
 }
