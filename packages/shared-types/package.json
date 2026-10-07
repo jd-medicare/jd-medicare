@@ -6,5 +6,5 @@
   "types": "dist/src/index.d.ts",
   "files": ["dist", "api-registry.json"],
   "scripts": { "build": "tsc -p tsconfig.json", "test": "echo \"tested via apps/api\"" },
-  "devDependencies": { "typescript": "^5.6.3" }
+  "devDependencies": { "typescript": "^7.0.2" }
 }
