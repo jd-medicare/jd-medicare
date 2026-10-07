@@ -58,7 +58,7 @@ Deno.serve(async (req: Request) => {
       .select(`
         id, organizationId, customerId, status, version, agentId, teamLeaderId, processedById,
         processedAt, rejectionReason, submittedAt, createdAt, updatedAt,
-        customer:customers(firstName, lastName, phone),
+        customer:customers(id, firstName, lastName, phone, dateOfBirth, address, zipCode),
         callRecord:call_records(durationSeconds),
         decision:accept_reject_actions(decision, reason, createdAt),
         agent:agentId(id, fullName)

@@ -20,7 +20,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_cases_customerId') THEN
-    ALTER TABLE "cases" ADD CONSTRAINT "fk_cases_customerId" FOREIGN KEY ("customerId") REFERENCES "customers"("id") ON DELETE RESTRICT;
+    ALTER TABLE "cases" ADD CONSTRAINT "fk_cases_customerId" FOREIGN KEY ("customerId") REFERENCES "customers"("id") ON DELETE CASCADE;
   END IF;
 END $$;
 -- @@
@@ -50,7 +50,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_call_records_caseId') THEN
-    ALTER TABLE "call_records" ADD CONSTRAINT "fk_call_records_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE RESTRICT;
+    ALTER TABLE "call_records" ADD CONSTRAINT "fk_call_records_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE CASCADE;
   END IF;
 END $$;
 -- @@
@@ -68,7 +68,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_case_assignments_caseId') THEN
-    ALTER TABLE "case_assignments" ADD CONSTRAINT "fk_case_assignments_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE RESTRICT;
+    ALTER TABLE "case_assignments" ADD CONSTRAINT "fk_case_assignments_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE CASCADE;
   END IF;
 END $$;
 -- @@
@@ -92,7 +92,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_workflow_transitions_caseId') THEN
-    ALTER TABLE "workflow_transitions" ADD CONSTRAINT "fk_workflow_transitions_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE RESTRICT;
+    ALTER TABLE "workflow_transitions" ADD CONSTRAINT "fk_workflow_transitions_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE CASCADE;
   END IF;
 END $$;
 -- @@
@@ -110,7 +110,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_accept_reject_actions_caseId') THEN
-    ALTER TABLE "accept_reject_actions" ADD CONSTRAINT "fk_accept_reject_actions_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE RESTRICT;
+    ALTER TABLE "accept_reject_actions" ADD CONSTRAINT "fk_accept_reject_actions_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE CASCADE;
   END IF;
 END $$;
 -- @@
@@ -128,7 +128,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_case_revisions_caseId') THEN
-    ALTER TABLE "case_revisions" ADD CONSTRAINT "fk_case_revisions_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE RESTRICT;
+    ALTER TABLE "case_revisions" ADD CONSTRAINT "fk_case_revisions_caseId" FOREIGN KEY ("caseId") REFERENCES "cases"("id") ON DELETE CASCADE;
   END IF;
 END $$;
 -- @@
@@ -152,7 +152,7 @@ END $$;
 -- @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_incomes_relatedCaseId') THEN
-    ALTER TABLE "incomes" ADD CONSTRAINT "fk_incomes_relatedCaseId" FOREIGN KEY ("relatedCaseId") REFERENCES "cases"("id") ON DELETE RESTRICT;
+    ALTER TABLE "incomes" ADD CONSTRAINT "fk_incomes_relatedCaseId" FOREIGN KEY ("relatedCaseId") REFERENCES "cases"("id") ON DELETE SET NULL;
   END IF;
 END $$;
 -- @@

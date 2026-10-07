@@ -64,9 +64,16 @@ function getLocallyRegisteredCustomers(): CustomerDto[] {
 export function saveLocallyRegisteredCustomer(customer: CustomerDto) {
   try {
     const list = getLocallyRegisteredCustomers();
-    const existingIndex = list.findIndex((c) => c.id === customer.id || c.phone === customer.phone);
+    const cleanPhone = (customer.phone || '').replace(/\D/g, '');
+    const existingIndex = list.findIndex(
+      (c) => c.id === customer.id || (cleanPhone && (c.phone || '').replace(/\D/g, '') === cleanPhone)
+    );
     if (existingIndex >= 0) {
-      list[existingIndex] = customer;
+      list[existingIndex] = {
+        ...list[existingIndex],
+        ...customer,
+        zipCode: customer.zipCode || list[existingIndex].zipCode || '',
+      };
     } else {
       list.unshift(customer);
     }
@@ -93,7 +100,17 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
     if (serverCases?.data) {
       for (const c of serverCases.data) {
         if (c.id) caseMap.set(c.id, c);
-        if (c.customer?.id) caseMap.set(`cust_${c.customer.id}`, c);
+        const custId = c.customerId || c.customer?.id;
+        if (custId) {
+          caseMap.set(`cust_${custId}`, c);
+          caseMap.set(custId, c);
+        }
+        if (c.customer?.phone) {
+          const cleanPhone = c.customer.phone.replace(/\D/g, '');
+          if (cleanPhone) {
+            caseMap.set(`phone_${cleanPhone}`, c);
+          }
+        }
       }
     }
   } catch (e) {
@@ -124,7 +141,8 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
 
     if (dbCustomers) {
       for (const dc of dbCustomers) {
-        if (!customers.some((c) => c.id === dc.id || c.phone === dc.phone)) {
+        const cleanPhone = (dc.phone || '').replace(/\D/g, '');
+        if (!customers.some((c) => c.id === dc.id || (cleanPhone && (c.phone || '').replace(/\D/g, '') === cleanPhone))) {
           customers.push(CustomerDto.parse(dc));
         }
       }
@@ -136,8 +154,21 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
   // 4. Merge locally registered customers
   const localCust = getLocallyRegisteredCustomers();
   for (const lc of localCust) {
-    if (!customers.some((c) => c.id === lc.id || c.phone === lc.phone)) {
-      customers.unshift(lc);
+    const cleanPhone = (lc.phone || '').replace(/\D/g, '');
+    const existingIdx = customers.findIndex((c) => c.id === lc.id || (cleanPhone && (c.phone || '').replace(/\D/g, '') === cleanPhone));
+    if (existingIdx >= 0) {
+      customers[existingIdx] = {
+        ...customers[existingIdx],
+        ...lc,
+        zipCode: lc.zipCode || customers[existingIdx].zipCode || '',
+      };
+    } else {
+      // If customer has an ID and wasn't in DB, check if it was recently created
+      const ageMs = lc.createdAt ? Date.now() - new Date(lc.createdAt).getTime() : 999999;
+      // If it's not recently created and DB was queried, do not revive deleted customer
+      if (ageMs < 30000) {
+        customers.unshift(lc);
+      }
     }
   }
 
@@ -145,12 +176,16 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
   const unified: CaseDto[] = [];
   for (const c of customers) {
     const custKey = `cust_${c.id}`;
-    let existingCase = caseMap.get(custKey) || (c.id ? caseMap.get(c.id) : undefined);
+    const cleanPhone = (c.phone || '').replace(/\D/g, '');
+    let existingCase =
+      caseMap.get(custKey) ||
+      (c.id ? caseMap.get(c.id) : undefined) ||
+      (cleanPhone ? caseMap.get(`phone_${cleanPhone}`) : undefined);
 
     const savedStatus = getCaseStatus(c.id);
 
     // Check for stored call length
-    const storedDuration = getLocalCallLength(c.id);
+    const storedDuration = getLocalCallLength(c.id) || (existingCase?.id ? getLocalCallLength(existingCase.id) : null);
 
     if (existingCase) {
       // Apply status override if user accepted/rejected it
@@ -159,7 +194,11 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
       unified.push({
         ...existingCase,
         status: currentStatus,
-        customer: c,
+        customer: {
+          ...existingCase.customer,
+          ...c,
+          zipCode: c.zipCode || existingCase.customer?.zipCode || '',
+        },
         callLengthSeconds: durationSeconds,
         callLengthDisplay: formatCallSeconds(durationSeconds),
       });
@@ -167,13 +206,14 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
       // Synthesize case for this customer so it is immediately visible
       const syntheticCase: CaseDto = {
         id: c.id,
+        customerId: c.id,
         status: savedStatus,
         version: 1,
         submittedAt: c.createdAt || new Date().toISOString(),
         processedAt: null,
         processedBy: null,
         rejectionReason: null,
-        agent: { id: c.createdById || '', fullName: 'Intake Agent' },
+        agent: { id: c.createdById || '', fullName: '' },
         teamLeader: null,
         customer: c,
         callLengthSeconds: storedDuration,
@@ -185,7 +225,17 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
 
   // Add any server cases whose customer wasn't in the customer list
   for (const sc of Array.from(caseMap.values())) {
-    if (!unified.some((u) => u.id === sc.id)) {
+    const scPhone = (sc.customer?.phone || '').replace(/\D/g, '');
+    const scCustId = sc.customerId || sc.customer?.id;
+    const isAlreadyIncluded = unified.some((u) => {
+      if (u.id === sc.id) return true;
+      if (scCustId && (u.id === scCustId || u.customerId === scCustId || u.customer?.id === scCustId)) return true;
+      const uPhone = (u.customer?.phone || '').replace(/\D/g, '');
+      if (scPhone && uPhone && scPhone === uPhone) return true;
+      return false;
+    });
+
+    if (!isAlreadyIncluded) {
       const storedDuration = getLocalCallLength(sc.id);
       const durationSeconds = storedDuration !== null ? storedDuration : sc.callLengthSeconds;
       unified.push({
@@ -196,37 +246,41 @@ export async function getUnifiedCases(): Promise<CaseDto[]> {
     }
   }
 
-  return unified;
-}
+  // Final deduplication guarantee: ensure each customer appears EXACTLY ONCE
+  const deduplicated: CaseDto[] = [];
+  for (const c of unified) {
+    const phoneKey = (c.customer?.phone || '').replace(/\D/g, '');
+    const custId = c.customerId || c.customer?.id || c.id;
 
-export async function ensureCaseForCustomer(customer: { id: string; organizationId?: string; createdById?: string }) {
-  try {
-    const { data: session } = await supabase.auth.getSession();
-    if (!session?.session?.user) return null;
-    const user = session.session.user;
-    const userId = user.id;
-    const orgId = customer.organizationId || (user.app_metadata?.organization_id as string) || (user.user_metadata?.organization_id as string);
+    const existingIdx = deduplicated.findIndex((d) => {
+      const dPhone = (d.customer?.phone || '').replace(/\D/g, '');
+      const dCustId = d.customerId || d.customer?.id || d.id;
+      return (
+        (phoneKey && dPhone && dPhone === phoneKey) ||
+        (custId && dCustId && dCustId === custId) ||
+        d.id === c.id
+      );
+    });
 
-    if (orgId) {
-      try {
-        await supabase
-          .from('cases')
-          .insert({
-            customerId: customer.id,
-            organizationId: orgId,
-            agentId: customer.createdById || userId,
-            status: 'SUBMITTED',
-            version: 1,
-            submittedAt: new Date().toISOString(),
-          })
-          .select()
-          .maybeSingle();
-      } catch {}
+    if (existingIdx >= 0) {
+      // Customer already in list: merge and preserve zip code!
+      const existing = deduplicated[existingIdx];
+      const mergedZip = existing.customer?.zipCode || c.customer?.zipCode || '';
+      deduplicated[existingIdx] = {
+        ...existing,
+        customer: {
+          ...existing.customer,
+          ...c.customer,
+          zipCode: mergedZip,
+        },
+      };
+      continue;
     }
-    return null;
-  } catch (err) {
-    return null;
+
+    deduplicated.push(c);
   }
+
+  return deduplicated;
 }
 
 export async function ensureCasesForCustomers() {

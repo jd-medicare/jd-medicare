@@ -288,7 +288,7 @@ model Case {
   createdAt       DateTime   @default(now()) @db.Timestamptz(6)
   updatedAt       DateTime   @updatedAt @db.Timestamptz(6)
 
-  customer    Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer    Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
   callRecord  CallRecord?
   decision    AcceptRejectAction?
   assignments CaseAssignment[]

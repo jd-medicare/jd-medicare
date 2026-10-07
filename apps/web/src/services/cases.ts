@@ -5,7 +5,6 @@ import type { ListQuery } from './types';
 import { CaseDto, CustomerDto, type CaseStatus } from '../schemas';
 import { CustomerCreateResult } from '../schemas/domain';
 import {
-  ensureCaseForCustomer,
   getCaseStatus,
   getUnifiedCases,
   saveLocallyRegisteredCustomer,
@@ -27,39 +26,16 @@ export interface CustomerWithCaseStatus extends CustomerDto {
 }
 
 export const caseService = {
-  // customers.create creates the customer AND immediately syncs the case
+  // customers.create creates the customer and case via backend API
   createCustomer: async (b: CustomerForm) => {
     const res = await api.call('customers.create', { body: b, schema: CustomerCreateResult });
     const customer = res.data.customer;
 
     if (customer?.id) {
-      // Save locally and set initial case status so it is immediately visible to everyone
-      saveLocallyRegisteredCustomer(customer);
       setCaseStatus(customer.id, 'PENDING');
-      ensureCaseForCustomer(customer).catch(() => {});
     }
 
-    return {
-      data: {
-        customer,
-        case: {
-          id: customer.id,
-          status: 'PENDING' as CaseStatus,
-          version: 1,
-          submittedAt: customer.createdAt || new Date().toISOString(),
-          processedAt: null,
-          processedBy: null,
-          rejectionReason: null,
-          agent: { id: customer.createdById || '', fullName: 'Intake Agent' },
-          agentId: customer.createdById || '',
-          teamLeader: null,
-          teamLeaderId: null,
-          customer,
-          callLengthSeconds: null,
-          callLengthDisplay: null,
-        },
-      },
-    };
+    return res;
   },
 
   // Returns all unified cases across the system

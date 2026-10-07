@@ -96,11 +96,18 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (customerError || !customer) {
+      if (
+        customerError?.code === '23505' ||
+        customerError?.message?.includes('duplicate key') ||
+        customerError?.message?.includes('customers_organizationId_phone_key')
+      ) {
+        return errorResponse('PHONE_ALREADY_EXISTS', 'A customer with this phone number already exists.');
+      }
       return errorResponse('VALIDATION_ERROR', customerError?.message || 'Failed to create customer');
     }
 
     // Automatically create corresponding case in `cases` table
-    await client
+    const { data: createdCase } = await client
       .from('cases')
       .insert({
         organizationId: user.organizationId,
@@ -110,10 +117,14 @@ Deno.serve(async (req: Request) => {
         agentId: user.id,
         submittedAt: new Date().toISOString(),
       })
-      .select()
+      .select(`
+        id, organizationId, customerId, status, version, agentId, teamLeaderId, processedById,
+        processedAt, rejectionReason, submittedAt, createdAt, updatedAt,
+        agent:agentId(id, fullName)
+      `)
       .maybeSingle();
 
-    return jsonResponse({ data: customer }, 201);
+    return jsonResponse({ data: { customer, case: createdCase } }, 201);
   }
 
   // Parse ID: /:id

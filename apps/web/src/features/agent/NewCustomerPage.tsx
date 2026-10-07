@@ -32,6 +32,7 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
   const qc = useQueryClient();
   const m = useMutation({
     mutationFn: (b: CustomerForm) => caseService.createCustomer(b),
+    retry: false,
     onSuccess: (res, variables) => {
       // Record in audit log
       if (res?.data?.customer?.id) {
@@ -88,6 +89,7 @@ export default function NewCustomerPage({ user }: { user?: SessionUserDto }) {
 
   function submit(e: FormEvent) {
     e.preventDefault();
+    if (m.isPending) return;
     const eMap: Errors = {};
     if (!f.firstName.trim()) eMap.firstName = 'First name is required.';
     if (!f.lastName.trim()) eMap.lastName = 'Last name is required.';

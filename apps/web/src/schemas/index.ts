@@ -38,6 +38,7 @@ export type CustomerDto = z.infer<typeof CustomerDto>;
 export const CaseDto = z
   .object({
     id: z.string(),
+    customerId: z.string().optional(),
     status: CaseStatus,
     version: z.number().nullish().default(1),
     submittedAt: z.string().nullish().default(''),
@@ -88,6 +89,7 @@ export const CaseDto = z
         : null;
     return {
       id: row.id,
+      customerId: row.customerId || row.customer?.id || '',
       status: row.status,
       version: row.version ?? 1,
       submittedAt: row.submittedAt || '',

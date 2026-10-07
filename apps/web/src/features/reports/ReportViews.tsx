@@ -254,6 +254,36 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
     }
   }
 
+  // Deduplicate cases by customer phone/id so each customer is shown only once and always with zipCode
+  const uniqueCases: typeof cases = [];
+  const seenCust = new Set<string>();
+  for (const c of cases) {
+    const p = (c.customer?.phone || '').replace(/\D/g, '');
+    const cId = c.customerId || c.customer?.id || c.id;
+    const key = p ? `p_${p}` : `c_${cId}`;
+    if (seenCust.has(key)) {
+      const idx = uniqueCases.findIndex((uc) => {
+        const ucp = (uc.customer?.phone || '').replace(/\D/g, '');
+        const uccId = uc.customerId || uc.customer?.id || uc.id;
+        return (p && ucp && p === ucp) || (cId && uccId && cId === uccId);
+      });
+      if (idx >= 0 && !uniqueCases[idx].customer?.zipCode && c.customer?.zipCode) {
+        uniqueCases[idx] = {
+          ...uniqueCases[idx],
+          customer: {
+            ...uniqueCases[idx].customer,
+            ...c.customer,
+            zipCode: c.customer.zipCode,
+          },
+        };
+      }
+      continue;
+    }
+    seenCust.add(key);
+    uniqueCases.push(c);
+  }
+  cases = uniqueCases;
+
   // Summary counts
   const total = cases.length;
   const pending = cases.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED').length;
