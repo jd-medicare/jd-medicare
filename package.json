@@ -6,7 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "pnpm --filter @app/web build",
     "lint": "eslint \"{apps,packages}/**/*.ts\"",
     "format": "prettier --write .",
     "test": "pnpm -r test",
