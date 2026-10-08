@@ -24,7 +24,8 @@ export function CreateIncomeHeadDialog({ open, onClose, onCreated }: { open: boo
       qc.invalidateQueries({ queryKey: ['income-heads'] });
       qc.invalidateQueries({ queryKey: ['ceo'] });
       notifyLiveSync('income-head-created');
-      if (onCreated && res?.data?.id) onCreated(res.data.id);
+      const newId = res?.data?.id || res?.id;
+      if (onCreated && newId) onCreated(newId);
       setName('');
       onClose();
     },

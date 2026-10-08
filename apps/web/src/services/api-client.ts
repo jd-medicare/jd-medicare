@@ -32,8 +32,8 @@ export const ERROR_TEXT: Record<string, string> = {
 
 export const errorMessage = (e: unknown) => {
   if (e instanceof ApiError) {
-    if (e.code === 'VALIDATION_ERROR') {
-      return e.message || ERROR_TEXT[e.code];
+    if (e.message && e.message !== 'Not Found' && e.message !== 'Not found' && e.message !== 'OK') {
+      return e.message;
     }
     return ERROR_TEXT[e.code] ?? e.message;
   }
