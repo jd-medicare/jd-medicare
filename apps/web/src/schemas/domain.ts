@@ -112,6 +112,11 @@ export const IncomeDto = z
     currency: z.string().nullish().default('PKR'),
     date: z.string(),
     category: z.string(),
+    fromDate: z.string().nullable().optional(),
+    toDate: z.string().nullable().optional(),
+    incomeHeadId: z.string().nullable().optional(),
+    incomeHeadName: z.string().optional(),
+    incomeHead: z.object({ name: z.string() }).optional(),
     reference: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
     relatedCaseId: z.string().nullable().optional(),
@@ -125,7 +130,10 @@ export const IncomeDto = z
     amount: i.amount,
     currency: i.currency || 'PKR',
     date: i.date,
-    category: i.category,
+    category: i.incomeHeadName || i.incomeHead?.name || i.category,
+    fromDate: i.fromDate ?? null,
+    toDate: i.toDate ?? null,
+    incomeHeadId: i.incomeHeadId ?? null,
     reference: i.reference ?? null,
     description: i.description ?? null,
     relatedCaseId: i.relatedCaseId ?? null,
@@ -134,6 +142,8 @@ export const IncomeDto = z
     createdAt: i.createdAt || '',
   }));
 export type IncomeDto = z.infer<typeof IncomeDto>;
+export const IncomeHeadDto = z.object({ id: z.string(), name: z.string(), isActive: z.boolean().optional() });
+export type IncomeHeadDto = z.infer<typeof IncomeHeadDto>;
 export const ExpenseDto = z
   .object({
     id: z.string(),
@@ -219,3 +229,5 @@ export const CeoDashboard = z.object({
     incomeVsExpenseByMonth: z.array(z.object({ month: z.string(), income: z.string(), expenses: z.string() })),
   }),
 });
+export type CeoDashboardDto = z.infer<typeof CeoDashboard>;
+

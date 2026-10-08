@@ -14,6 +14,40 @@ const Actions = ({ onClose, busy, label, danger, disabled }: { onClose: () => vo
     <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} disabled={busy || disabled}>{label}</button>
   </div>);
 
+export function CreateIncomeHeadDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated?: (id: string) => void }) {
+  const [name, setName] = useState('');
+  const [err, setErr] = useState('');
+  const qc = useQueryClient();
+  const m = useMutation<any>({
+    mutationFn: () => financeService.createIncomeHead(name),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['income-heads'] });
+      qc.invalidateQueries({ queryKey: ['ceo'] });
+      notifyLiveSync('income-head-created');
+      if (onCreated && res?.data?.id) onCreated(res.data.id);
+      setName('');
+      onClose();
+    },
+  });
+  useEffect(() => { if (open) { setName(''); setErr(''); m.reset(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) { setErr('Income head name is required.'); return; }
+    setErr('');
+    m.mutate();
+  }
+  return (
+    <Dialog open={open} title="Add income head" onClose={onClose}>
+      <form onSubmit={submit} noValidate>
+        <p style={{ margin: '0 0 12px' }}>Create a new income category head (e.g. Consulting, Medicare Commission, Retainer, Referral Fee).</p>
+        <TextField label="Income head name" required autoComplete="off" value={name} onChange={setName} error={err} />
+        {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
+        <Actions onClose={onClose} busy={m.isPending} label="Add income head" />
+      </form>
+    </Dialog>
+  );
+}
+
 export function CreateExpenseHeadDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated?: (id: string) => void }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState('');
@@ -49,13 +83,24 @@ export function CreateExpenseHeadDialog({ open, onClose, onCreated }: { open: bo
 }
 
 export function CreateTxDialog({ kind, open, onClose }: { kind: Kind; open: boolean; onClose: () => void }) {
-  const income = kind === 'income'; const [f, setF] = useState(blank()); const [err, setErr] = useState<Record<string, string>>({}); const [headOpen, setHeadOpen] = useState(false); const qc = useQueryClient();
-  const heads = useQuery({ queryKey: ['expense-heads'], queryFn: () => financeService.heads(), enabled: open && !income });
+  const income = kind === 'income';
+  const [f, setF] = useState(blank());
+  const [err, setErr] = useState<Record<string, string>>({});
+  const [headOpen, setHeadOpen] = useState(false);
+  const qc = useQueryClient();
+
+  const expenseHeads = useQuery({ queryKey: ['expense-heads'], queryFn: () => financeService.heads(), enabled: open && !income });
+  const incomeHeads = useQuery({ queryKey: ['income-heads'], queryFn: () => financeService.incomeHeads(), enabled: open && income });
+
   const m = useMutation<any>({
     mutationFn: () => financeService.create(kind, f),
     onSuccess: (res) => {
-      recordAudit(income ? 'INCOME_CREATED' : 'EXPENSE_CREATED', income ? 'income' : 'expense', res?.data?.id || 'tx', { amount: f.amount, head: f.category || f.expenseHeadId });
+      recordAudit(income ? 'INCOME_CREATED' : 'EXPENSE_CREATED', income ? 'income' : 'expense', res?.data?.id || 'tx', {
+        amount: f.amount,
+        head: f.category || f.incomeHeadId || f.expenseHeadId,
+      });
       qc.invalidateQueries({ queryKey: ['finance'] });
+      qc.invalidateQueries({ queryKey: ['income-heads'] });
       qc.invalidateQueries({ queryKey: ['audit'] });
       qc.invalidateQueries({ queryKey: ['ceo'] });
       qc.invalidateQueries({ queryKey: ['ceo-expenses'] });
@@ -66,46 +111,183 @@ export function CreateTxDialog({ kind, open, onClose }: { kind: Kind; open: bool
       onClose();
     },
   });
-  useEffect(() => { if (open) { setF(blank()); setErr({}); m.reset(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-  const set = (k: keyof TxForm) => (v: string) => setF({ ...f, [k]: v });
+
+  useEffect(() => {
+    if (open) {
+      const b = blank();
+      if (income) {
+        b.fromDate = today();
+        b.toDate = today();
+      }
+      setF(b);
+      setErr({});
+      m.reset();
+    }
+  }, [open, income]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const set = (k: keyof TxForm) => (v: string) => setF((prev) => ({ ...prev, [k]: v }));
+
   function submit(e: FormEvent) {
-    e.preventDefault(); const x: Record<string, string> = {};
-    if (!isMoney(f.amount)) x.amount = 'Enter an amount like 1250.50 (digits and up to two decimals).';
-    if (!f.date) x.date = 'Date is required.';
-    if (income && !f.category?.trim()) x.category = 'Category is required.';
-    if (!income && !f.expenseHeadId) x.expenseHeadId = 'Choose an expense head.';
-    setErr(x); if (!Object.keys(x).length) m.mutate();
+    e.preventDefault();
+    const x: Record<string, string> = {};
+    if (!isMoney(f.amount) || Number(f.amount) <= 0) {
+      x.amount = 'Enter a valid positive amount (e.g. 1500.00).';
+    }
+
+    if (income) {
+      if (!f.incomeHeadId && !f.category) x.incomeHeadId = 'Please select an income head.';
+      if (!f.fromDate) x.fromDate = 'From date is required.';
+      if (!f.toDate) x.toDate = 'To date is required.';
+      if (f.fromDate && f.toDate && f.fromDate > f.toDate) {
+        x.toDate = 'To date cannot be earlier than From date.';
+      }
+    } else {
+      if (!f.date) x.date = 'Date is required.';
+      if (!f.expenseHeadId) x.expenseHeadId = 'Choose an expense head.';
+    }
+
+    setErr(x);
+    if (!Object.keys(x).length) {
+      // For income, synchronize date with fromDate if date isn't set
+      if (income && !f.date) {
+        f.date = f.fromDate || today();
+      }
+      m.mutate();
+    }
   }
+
   return (
     <>
       <Dialog open={open} title={income ? 'Add income' : 'Add expense'} onClose={onClose}>
         <form onSubmit={submit} noValidate>
-          {!income ? (
+          {income ? (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <label htmlFor="expense-head" style={{ margin: 0, fontWeight: 600 }}>Expense head *</label>
-                <button type="button" className="btn btn-ghost" style={{ padding: '2px 8px', fontSize: 13, color: 'var(--primary)' }} onClick={() => setHeadOpen(true)}>+ New head</button>
+                <label htmlFor="income-head" style={{ margin: 0, fontWeight: 600 }}>Income Head *</label>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ padding: '2px 8px', fontSize: 13, color: 'var(--primary)' }}
+                  onClick={() => setHeadOpen(true)}
+                >
+                  + New head
+                </button>
               </div>
-              <select id="expense-head" className="input" style={{ marginTop: 5, width: '100%', height: 40 }} value={f.expenseHeadId} onChange={(e) => set('expenseHeadId')(e.target.value)} aria-invalid={!!err.expenseHeadId} required>
-                <option value="">{heads.isLoading ? 'Loading…' : 'Choose expense head…'}</option>
-                {heads.data?.data.filter((h) => h.isActive).map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+              <select
+                id="income-head"
+                className="input"
+                style={{ marginTop: 5, width: '100%', height: 40 }}
+                value={f.incomeHeadId}
+                onChange={(e) => {
+                  const selId = e.target.value;
+                  const found = incomeHeads.data?.data?.find((h) => h.id === selId);
+                  setF((prev) => ({
+                    ...prev,
+                    incomeHeadId: selId,
+                    category: found ? found.name : prev.category,
+                  }));
+                }}
+                aria-invalid={!!err.incomeHeadId}
+                required
+              >
+                <option value="">{incomeHeads.isLoading ? 'Loading income heads…' : 'Choose income head…'}</option>
+                {incomeHeads.data?.data?.map((h) => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
               </select>
-              {(err.expenseHeadId || heads.isError) && <span className="err" role="alert">{err.expenseHeadId ?? errorMessage(heads.error)}</span>}
-              <TextField label="Remarks / Details" placeholder="e.g. Office maintenance or Bill reference" value={f.description ?? ''} onChange={set('description')} />
+              {(err.incomeHeadId || incomeHeads.isError) && (
+                <span className="err" role="alert">{err.incomeHeadId ?? errorMessage(incomeHeads.error)}</span>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+                <TextField
+                  label="From Date"
+                  type="date"
+                  required
+                  value={f.fromDate ?? ''}
+                  onChange={(val) => setF((prev) => ({ ...prev, fromDate: val, date: prev.date || val }))}
+                  error={err.fromDate}
+                />
+                <TextField
+                  label="To Date"
+                  type="date"
+                  required
+                  value={f.toDate ?? ''}
+                  onChange={set('toDate')}
+                  error={err.toDate}
+                />
+              </div>
+
+              <TextField
+                label="Amount (PKR)"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="e.g. 50000"
+                required
+                value={f.amount}
+                onChange={set('amount')}
+                error={err.amount}
+              />
+              <TextField
+                label="Remarks / Details"
+                placeholder="Reference or income details..."
+                value={f.description ?? ''}
+                onChange={set('description')}
+              />
             </>
           ) : (
             <>
-              <TextField label="Category" required value={f.category ?? ''} onChange={set('category')} error={err.category} />
-              <TextField label="Remarks / Details" placeholder="Reference or remarks" value={f.description ?? ''} onChange={set('description')} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label htmlFor="expense-head" style={{ margin: 0, fontWeight: 600 }}>Expense head *</label>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ padding: '2px 8px', fontSize: 13, color: 'var(--primary)' }}
+                  onClick={() => setHeadOpen(true)}
+                >
+                  + New head
+                </button>
+              </div>
+              <select
+                id="expense-head"
+                className="input"
+                style={{ marginTop: 5, width: '100%', height: 40 }}
+                value={f.expenseHeadId}
+                onChange={(e) => set('expenseHeadId')(e.target.value)}
+                aria-invalid={!!err.expenseHeadId}
+                required
+              >
+                <option value="">{expenseHeads.isLoading ? 'Loading…' : 'Choose expense head…'}</option>
+                {expenseHeads.data?.data.filter((h) => h.isActive).map((h) => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
+              </select>
+              {(err.expenseHeadId || expenseHeads.isError) && (
+                <span className="err" role="alert">{err.expenseHeadId ?? errorMessage(expenseHeads.error)}</span>
+              )}
+              <TextField label="Remarks / Details" placeholder="e.g. Office maintenance or Bill reference" value={f.description ?? ''} onChange={set('description')} />
+              <TextField label="Amount" inputMode="decimal" autoComplete="off" required value={f.amount} onChange={set('amount')} error={err.amount} />
+              <TextField label="Date" type="date" required value={f.date} onChange={set('date')} error={err.date} />
             </>
           )}
-          <TextField label="Amount" inputMode="decimal" autoComplete="off" required value={f.amount} onChange={set('amount')} error={err.amount} />
-          <TextField label="Date" type="date" required value={f.date} onChange={set('date')} error={err.date} />
+
           {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
           <Actions onClose={onClose} busy={m.isPending} label="Save" />
         </form>
       </Dialog>
-      <CreateExpenseHeadDialog open={headOpen} onClose={() => setHeadOpen(false)} onCreated={(newId) => set('expenseHeadId')(newId)} />
+      {income ? (
+        <CreateIncomeHeadDialog
+          open={headOpen}
+          onClose={() => setHeadOpen(false)}
+          onCreated={(newId) => set('incomeHeadId')(newId)}
+        />
+      ) : (
+        <CreateExpenseHeadDialog
+          open={headOpen}
+          onClose={() => setHeadOpen(false)}
+          onCreated={(newId) => set('expenseHeadId')(newId)}
+        />
+      )}
     </>
   );
 }

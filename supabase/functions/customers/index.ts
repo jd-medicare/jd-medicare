@@ -150,25 +150,165 @@ Deno.serve(async (req: Request) => {
 
   // PATCH /:id
   if (req.method === 'PATCH') {
-    const permErr = requirePermission(user, 'customer:update');
-    if (permErr) return permErr;
+    // RBAC: Allowed: Team Leader, Admin, Primary Super Admin. Denied: Outsource, regular Agent, read-only.
+    const isSuper = Boolean(
+      user.isPrimarySuperAdmin ||
+      user.roleKey === 'PRIMARY_SUPER_ADMIN' ||
+      user.roleKey === 'SUPER_ADMIN' ||
+      user.roleKey === 'ADMIN' ||
+      user.roleKey.includes('ADMIN')
+    );
+    const isTeamLeader = Boolean(user.roleKey === 'TEAM_LEADER' || user.roleKey.includes('TEAM_LEADER'));
+    const canEdit = (isSuper || isTeamLeader) && user.roleKey !== 'AGENT' && user.roleKey !== 'OUTSOURCE';
+
+    if (!canEdit) {
+      return errorResponse('FORBIDDEN', 'Only Team Leaders and Administrators have permission to edit customer details.');
+    }
 
     const body = await req.json().catch(() => ({}));
-    const updates: Record<string, any> = {};
-    ['firstName', 'lastName', 'address', 'zipCode', 'extra'].forEach((k) => {
-      if (body[k] !== undefined) updates[k] = body[k];
-    });
 
-    const { data, error } = await client
+    // Resolve target customer (id could be customerId or caseId)
+    let actualCustomerId = customerId;
+    const { data: directCust } = await client
+      .from('customers')
+      .select('id, phone, extra, address')
+      .eq('id', customerId)
+      .eq('organizationId', user.organizationId)
+      .maybeSingle();
+
+    if (!directCust) {
+      const { data: caseRow } = await client
+        .from('cases')
+        .select('customerId')
+        .eq('id', customerId)
+        .eq('organizationId', user.organizationId)
+        .maybeSingle();
+      if (caseRow?.customerId) {
+        actualCustomerId = caseRow.customerId;
+      } else {
+        return errorResponse('NOT_FOUND', 'Customer not found');
+      }
+    }
+
+    // Validate and check duplicate phone if phone is updated
+    if (body.phone) {
+      const cleanPhone = String(body.phone).trim();
+      const digits = cleanPhone.replace(/\D/g, '');
+      if (digits.length < 7 || digits.length > 15) {
+        return errorResponse('VALIDATION_ERROR', 'Phone number must contain between 7 and 15 digits.');
+      }
+
+      const { data: existingPhone } = await client
+        .from('customers')
+        .select('id')
+        .eq('organizationId', user.organizationId)
+        .eq('phone', cleanPhone)
+        .neq('id', actualCustomerId)
+        .maybeSingle();
+
+      if (existingPhone) {
+        return errorResponse('PHONE_ALREADY_EXISTS', 'A customer with this phone number already exists.');
+      }
+    }
+
+    // Validate ZIP code if updated
+    if (body.zipCode !== undefined) {
+      const zip = String(body.zipCode).trim();
+      if (zip && zip.length > 20) {
+        return errorResponse('VALIDATION_ERROR', 'ZIP Code must not exceed 20 characters.');
+      }
+    }
+
+    // Prepare customer updates
+    const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
+    if (body.firstName !== undefined) updates.firstName = String(body.firstName).trim();
+    if (body.lastName !== undefined) updates.lastName = String(body.lastName).trim();
+    if (body.phone !== undefined) updates.phone = String(body.phone).trim();
+    if (body.dateOfBirth !== undefined) updates.dateOfBirth = body.dateOfBirth ? String(body.dateOfBirth).trim() : null;
+    if (body.zipCode !== undefined) updates.zipCode = String(body.zipCode).trim();
+
+    // State handling
+    if (body.state !== undefined) {
+      updates.address = String(body.state).trim();
+    } else if (body.address !== undefined) {
+      updates.address = String(body.address).trim();
+    }
+
+    // Extra fields: ssnMbi, age, state
+    const currentExtra = (directCust?.extra as Record<string, any>) || {};
+    const updatedExtra: Record<string, any> = {
+      ...currentExtra,
+      ...(body.extra || {}),
+    };
+    if (body.ssnMbi !== undefined) updatedExtra.ssnMbi = body.ssnMbi ? String(body.ssnMbi).trim() : '';
+    if (body.age !== undefined) updatedExtra.age = body.age !== '' && body.age !== null ? Number(body.age) : null;
+    if (body.state !== undefined) updatedExtra.state = String(body.state).trim();
+
+    updates.extra = updatedExtra;
+
+    const { data: updatedCustomer, error: updateError } = await client
       .from('customers')
       .update(updates)
-      .eq('id', customerId)
+      .eq('id', actualCustomerId)
       .eq('organizationId', user.organizationId)
       .select()
       .single();
 
-    if (error) return errorResponse('VALIDATION_ERROR', error.message);
-    return jsonResponse({ data });
+    if (updateError) return errorResponse('VALIDATION_ERROR', updateError.message);
+
+    // Update case assignments (Assigned Agent, Team Leader) if provided
+    const caseUpdates: Record<string, any> = {};
+    if (body.agentId !== undefined && body.agentId) caseUpdates.agentId = body.agentId;
+    if (body.teamLeaderId !== undefined) caseUpdates.teamLeaderId = body.teamLeaderId || null;
+
+    let updatedCase = null;
+    if (Object.keys(caseUpdates).length > 0) {
+      caseUpdates.updatedAt = new Date().toISOString();
+      const { data: cData } = await client
+        .from('cases')
+        .update(caseUpdates)
+        .eq('customerId', actualCustomerId)
+        .eq('organizationId', user.organizationId)
+        .select(`
+          id, customerId, status, agentId, teamLeaderId,
+          agent:agentId(id, fullName),
+          teamLeader:teamLeaderId(id, fullName)
+        `)
+        .maybeSingle();
+      updatedCase = cData;
+    }
+
+    // Update call length if provided
+    if (body.durationSeconds !== undefined && body.durationSeconds !== null && body.durationSeconds !== '') {
+      const dur = parseInt(String(body.durationSeconds), 10);
+      if (!isNaN(dur) && dur >= 0) {
+        const { data: caseRow } = await client
+          .from('cases')
+          .select('id')
+          .eq('customerId', actualCustomerId)
+          .eq('organizationId', user.organizationId)
+          .maybeSingle();
+
+        if (caseRow?.id) {
+          await client
+            .from('call_records')
+            .upsert({
+              organizationId: user.organizationId,
+              caseId: caseRow.id,
+              durationSeconds: dur,
+              setById: user.id,
+              updatedAt: new Date().toISOString(),
+            }, { onConflict: 'caseId' });
+        }
+      }
+    }
+
+    return jsonResponse({
+      data: {
+        customer: updatedCustomer,
+        case: updatedCase,
+      },
+    });
   }
 
   return errorResponse('NOT_FOUND', `Method ${req.method} not supported`);

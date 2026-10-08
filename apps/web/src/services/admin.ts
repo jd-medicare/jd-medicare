@@ -23,7 +23,26 @@ export interface CreateUserForm {
   menuIds?: string[];
 }
 
+export interface UpdateUserForm {
+  fullName?: string;
+  email?: string;
+  phone?: string;
+}
+
 export const adminService = {
+  updateUser: async (id: string, b: UpdateUserForm) => {
+    const cleanEmail = b.email ? b.email.trim().toLowerCase() : undefined;
+    const cleanFullName = b.fullName ? b.fullName.trim() : undefined;
+    return await api.call('users.update', {
+      params: { id },
+      body: {
+        fullName: cleanFullName,
+        email: cleanEmail,
+        phone: b.phone?.trim(),
+      },
+      schema: MutationResultDto,
+    });
+  },
   users: async (q: ListQuery) => {
     const list: UserDto[] = [];
     const seenIds = new Set<string>();

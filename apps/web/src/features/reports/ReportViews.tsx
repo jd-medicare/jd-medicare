@@ -4,10 +4,25 @@ import { useQuery } from '@tanstack/react-query';
 import { reportService } from '../../services/reports';
 import { errorMessage } from '../../services/api-client';
 import { Kpis, Loading, StatusBadge } from '../../design-system';
-import { calculateAge, fmtSeconds, getCustomerSsnMbi, getCustomerState } from '../../lib/format';
+import { calculateAge, fmtSeconds, getCustomerSsnMbi, getCustomerState, maskSsnMbi } from '../../lib/format';
 import type { ListQuery } from '../../services/types';
 import { formatCallSeconds, getUnifiedCases } from '../../services/caseSync';
 import type { CaseDto } from '../../schemas';
+
+// Helper to normalize any date string (DD/MM/YYYY or YYYY-MM-DD) to YYYY-MM-DD for accurate comparison
+export function toDateKey(d?: string | number | null): string {
+  if (!d) return '';
+  const s = String(d).trim();
+  const dmy = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (dmy) {
+    return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  }
+  const ymd = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (ymd) {
+    return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+  }
+  return s.substring(0, 10);
+}
 
 function Table({ caption, head, rows }: { caption: string; head: string[]; rows: Array<Array<string | number>> }) {
   return (
@@ -26,11 +41,13 @@ function Table({ caption, head, rows }: { caption: string; head: string[]; rows:
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={head.length}>No data for these filters.</td>
+              <td colSpan={head.length} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: 16 }}>
+                No records match the active filters.
+              </td>
             </tr>
           ) : (
-            rows.map((r) => (
-              <tr key={String(r[0])}>
+            rows.map((r, rowIdx) => (
+              <tr key={rowIdx}>
                 {r.map((c, i) => (
                   <td key={i}>{c}</td>
                 ))}
@@ -95,7 +112,7 @@ function CustomerRecordsTable({
                     <td>{calculateAge(c.customer?.dateOfBirth, (c.customer?.extra as any)?.age)}</td>
                     <td>{getCustomerState(c.customer)}</td>
                     <td>{c.customer?.zipCode || '—'}</td>
-                    <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{getCustomerSsnMbi(c.customer)}</td>
+                    <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{maskSsnMbi(getCustomerSsnMbi(c.customer))}</td>
                     <td>{c.agent?.fullName || 'Intake Agent'}</td>
                     <td style={{ fontSize: 13, color: 'var(--muted, #94a3b8)' }}>{c.submittedAt ? new Date(c.submittedAt).toLocaleDateString() : '—'}</td>
                     {showCall && <td style={{ fontSize: 13 }}>{callLen}</td>}
@@ -119,7 +136,7 @@ function State({ q, children }: { q: { isLoading: boolean; isError: boolean; err
   return <>{children}</>;
 }
 
-export function OutsourceView({ filters }: { filters: ListQuery & { user?: string } }) {
+export function OutsourceView({ filters }: { filters: ListQuery & { user?: string; status?: string; search?: string } }) {
   const q = useQuery({
     queryKey: ['report', 'OUTSOURCE', filters],
     queryFn: () => reportService.outsource(filters),
@@ -130,51 +147,14 @@ export function OutsourceView({ filters }: { filters: ListQuery & { user?: strin
     queryFn: () => getUnifiedCases(),
     refetchInterval: 3000,
   });
-  const rawSummary = q.data?.data.summary;
 
-  // Filter summary by user if user filter was applied
-  const s = rawSummary
-    ? (() => {
-        if (!filters.user) return rawSummary;
-        const filterUserLower = String(filters.user).toLowerCase().trim();
-        const matchingAgents = rawSummary.byAgent.filter(
-          (a) => a.agentName.toLowerCase().includes(filterUserLower) || a.agentId.toLowerCase().includes(filterUserLower)
-        );
-        if (matchingAgents.length === 0) {
-          return {
-            ...rawSummary,
-            total: 0,
-            accepted: 0,
-            rejected: 0,
-            pending: 0,
-            remaining: 0,
-            processingRate: 0,
-            acceptanceRate: 0,
-            rejectionRate: 0,
-            byAgent: [],
-          };
-        }
-        const total = matchingAgents.reduce((sum, a) => sum + a.total, 0);
-        const accepted = matchingAgents.reduce((sum, a) => sum + a.accepted, 0);
-        const rejected = matchingAgents.reduce((sum, a) => sum + a.rejected, 0);
-        const pending = matchingAgents.reduce((sum, a) => sum + a.pending, 0);
-        const processed = accepted + rejected;
-        return {
-          ...rawSummary,
-          total,
-          accepted,
-          rejected,
-          pending,
-          remaining: pending,
-          processingRate: total > 0 ? Math.round((processed / total) * 100) : 0,
-          acceptanceRate: processed > 0 ? Math.round((accepted / processed) * 100) : 0,
-          rejectionRate: processed > 0 ? Math.round((rejected / processed) * 100) : 0,
-          byAgent: matchingAgents,
-        };
-      })()
-    : null;
+  const allCases = casesQ.data ?? [];
+  let matchingCases = allCases;
+  const fromKey = toDateKey(filters.dateFrom);
+  const toKey = toDateKey(filters.dateTo);
 
-  let matchingCases = casesQ.data ?? [];
+  if (fromKey) matchingCases = matchingCases.filter((c) => toDateKey(c.submittedAt) >= fromKey);
+  if (toKey) matchingCases = matchingCases.filter((c) => toDateKey(c.submittedAt) <= toKey);
   if (filters.user) {
     const filterUserLower = String(filters.user).toLowerCase().trim();
     matchingCases = matchingCases.filter(
@@ -183,42 +163,104 @@ export function OutsourceView({ filters }: { filters: ListQuery & { user?: strin
         (c.agent?.id || '').toLowerCase() === filterUserLower
     );
   }
+  if (filters.status) {
+    const s = String(filters.status).toUpperCase();
+    if (s === 'PENDING' || s === 'SUBMITTED') {
+      matchingCases = matchingCases.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED');
+    } else {
+      matchingCases = matchingCases.filter((c) => c.status === s);
+    }
+  }
+  if ((filters as any).search) {
+    const query = String((filters as any).search).toLowerCase().trim();
+    matchingCases = matchingCases.filter((c) => {
+      const name = `${c.customer?.firstName || ''} ${c.customer?.lastName || ''}`.toLowerCase();
+      const phone = (c.customer?.phone || '').toLowerCase();
+      const state = getCustomerState(c.customer).toLowerCase();
+      const zip = (c.customer?.zipCode || '').toLowerCase();
+      const ssn = getCustomerSsnMbi(c.customer).toLowerCase();
+      const agent = (c.agent?.fullName || '').toLowerCase();
+      return name.includes(query) || phone.includes(query) || state.includes(query) || zip.includes(query) || ssn.includes(query) || agent.includes(query);
+    });
+  }
+
+  // Deduplicate cases
+  const uniqueCases: typeof matchingCases = [];
+  const seenCust = new Set<string>();
+  for (const c of matchingCases) {
+    const p = (c.customer?.phone || '').replace(/\D/g, '');
+    const cId = c.customerId || c.customer?.id || c.id;
+    const key = p ? `p_${p}` : `c_${cId}`;
+    if (seenCust.has(key)) continue;
+    seenCust.add(key);
+    uniqueCases.push(c);
+  }
+  matchingCases = uniqueCases;
+
+  // Strict synchronized metrics
+  const total = matchingCases.length;
+  const pending = matchingCases.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED').length;
+  const accepted = matchingCases.filter((c) => c.status === 'ACCEPTED').length;
+  const rejected = matchingCases.filter((c) => c.status === 'REJECTED').length;
+  const processed = accepted + rejected;
+  const acceptanceRate = processed > 0 ? Math.round((accepted / processed) * 100) : 0;
+  const rejectionRate = processed > 0 ? Math.round((rejected / processed) * 100) : 0;
+
+  // By Agent
+  const agentMap: Record<string, { agentName: string; total: number; accepted: number; rejected: number; pending: number }> = {};
+  for (const c of matchingCases) {
+    const aName = c.agent?.fullName || 'Intake Agent';
+    if (!agentMap[aName]) agentMap[aName] = { agentName: aName, total: 0, accepted: 0, rejected: 0, pending: 0 };
+    agentMap[aName].total += 1;
+    if (c.status === 'ACCEPTED') agentMap[aName].accepted += 1;
+    else if (c.status === 'REJECTED') agentMap[aName].rejected += 1;
+    else agentMap[aName].pending += 1;
+  }
+  const byAgent = Object.values(agentMap).sort((a, b) => b.total - a.total);
+
+  // By Date
+  const dateMap: Record<string, { date: string; total: number; accepted: number; rejected: number; pending: number }> = {};
+  for (const c of matchingCases) {
+    const d = (c.submittedAt || '').substring(0, 10) || new Date().toISOString().substring(0, 10);
+    if (!dateMap[d]) dateMap[d] = { date: d, total: 0, accepted: 0, rejected: 0, pending: 0 };
+    dateMap[d].total += 1;
+    if (c.status === 'ACCEPTED') dateMap[d].accepted += 1;
+    else if (c.status === 'REJECTED') dateMap[d].rejected += 1;
+    else dateMap[d].pending += 1;
+  }
+  const byDate = Object.values(dateMap).sort((a, b) => b.date.localeCompare(a.date));
 
   return (
     <State q={q}>
-      {s && (
-        <>
-          <Kpis
-            label="Outsource summary"
-            items={[
-              ['Total cases', s.total],
-              ['Accepted cases', s.accepted],
-              ['Rejected cases', s.rejected],
-              ['Pending / Remaining', s.remaining],
-              ['Processed', `${s.processingRate}%`],
-              ['Acceptance rate', `${s.acceptanceRate}%`],
-              ['Rejection rate', `${s.rejectionRate}%`],
-            ]}
-          />
-          <Table
-            caption="Outsource performance by agent / user"
-            head={['Agent / User', 'Total', 'Accepted', 'Rejected', 'Pending']}
-            rows={s.byAgent.map((a) => [a.agentName, a.total, a.accepted, a.rejected, a.pending])}
-          />
-          <Table
-            caption="Outsource records by date"
-            head={['Date', 'Total', 'Accepted', 'Rejected', 'Pending']}
-            rows={s.byDate.map((a) => [a.date, a.total, a.accepted, a.rejected, a.pending])}
-          />
-          <CustomerRecordsTable caption="Outsource customer records" cases={matchingCases} />
-        </>
-      )}
+      <Kpis
+        label="Outsource summary"
+        items={[
+          ['Total cases', total],
+          ['Accepted cases', accepted],
+          ['Rejected cases', rejected],
+          ['Pending cases', pending],
+          ['Processed cases', processed],
+          ['Acceptance rate', `${acceptanceRate}%`],
+          ['Rejection rate', `${rejectionRate}%`],
+        ]}
+      />
+      <Table
+        caption="Outsource performance by agent / user"
+        head={['Agent / User', 'Total Cases', 'Pending', 'Accepted', 'Rejected']}
+        rows={byAgent.map((a) => [a.agentName, a.total, a.pending, a.accepted, a.rejected])}
+      />
+      <Table
+        caption="Outsource records by date"
+        head={['Date', 'Total Cases', 'Pending', 'Accepted', 'Rejected']}
+        rows={byDate.map((a) => [a.date, a.total, a.pending, a.accepted, a.rejected])}
+      />
+      <CustomerRecordsTable caption="Outsource customer records" cases={matchingCases} />
     </State>
   );
 }
 
-/** The "team performance" table for team leaders is the byAgent block of this report. */
-export function TeamLeaderView({ filters }: { filters: ListQuery & { user?: string } }) {
+/** The "team performance" table for team leaders */
+export function TeamLeaderView({ filters }: { filters: ListQuery & { user?: string; status?: string; search?: string } }) {
   const q = useQuery({
     queryKey: ['report', 'TEAM_LEADER', filters],
     queryFn: () => reportService.teamLeader(filters),
@@ -229,9 +271,14 @@ export function TeamLeaderView({ filters }: { filters: ListQuery & { user?: stri
     queryFn: () => getUnifiedCases(),
     refetchInterval: 3000,
   });
-  const s = q.data?.data.summary;
 
-  let matchingCases = casesQ.data ?? [];
+  const allCases = casesQ.data ?? [];
+  let matchingCases = allCases;
+  const fromKey = toDateKey(filters.dateFrom);
+  const toKey = toDateKey(filters.dateTo);
+
+  if (fromKey) matchingCases = matchingCases.filter((c) => toDateKey(c.submittedAt) >= fromKey);
+  if (toKey) matchingCases = matchingCases.filter((c) => toDateKey(c.submittedAt) <= toKey);
   if (filters.user) {
     const filterUserLower = String(filters.user).toLowerCase().trim();
     matchingCases = matchingCases.filter(
@@ -240,36 +287,86 @@ export function TeamLeaderView({ filters }: { filters: ListQuery & { user?: stri
         (c.agent?.id || '').toLowerCase() === filterUserLower
     );
   }
+  if (filters.status) {
+    const s = String(filters.status).toUpperCase();
+    if (s === 'PENDING' || s === 'SUBMITTED') {
+      matchingCases = matchingCases.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED');
+    } else {
+      matchingCases = matchingCases.filter((c) => c.status === s);
+    }
+  }
+  if ((filters as any).search) {
+    const query = String((filters as any).search).toLowerCase().trim();
+    matchingCases = matchingCases.filter((c) => {
+      const name = `${c.customer?.firstName || ''} ${c.customer?.lastName || ''}`.toLowerCase();
+      const phone = (c.customer?.phone || '').toLowerCase();
+      const state = getCustomerState(c.customer).toLowerCase();
+      const zip = (c.customer?.zipCode || '').toLowerCase();
+      const ssn = getCustomerSsnMbi(c.customer).toLowerCase();
+      const agent = (c.agent?.fullName || '').toLowerCase();
+      return name.includes(query) || phone.includes(query) || state.includes(query) || zip.includes(query) || ssn.includes(query) || agent.includes(query);
+    });
+  }
+
+  // Deduplicate cases
+  const uniqueCases: typeof matchingCases = [];
+  const seenCust = new Set<string>();
+  for (const c of matchingCases) {
+    const p = (c.customer?.phone || '').replace(/\D/g, '');
+    const cId = c.customerId || c.customer?.id || c.id;
+    const key = p ? `p_${p}` : `c_${cId}`;
+    if (seenCust.has(key)) continue;
+    seenCust.add(key);
+    uniqueCases.push(c);
+  }
+  matchingCases = uniqueCases;
+
+  const total = matchingCases.length;
+  const pending = matchingCases.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED').length;
+  const accepted = matchingCases.filter((c) => c.status === 'ACCEPTED').length;
+  const rejected = matchingCases.filter((c) => c.status === 'REJECTED').length;
+  const processed = accepted + rejected;
+  const totalCallSeconds = matchingCases.reduce((acc, c) => acc + (c.callLengthSeconds || 0), 0);
+  const avgCallSeconds = total > 0 ? Math.round(totalCallSeconds / total) : 0;
+
+  // By Agent
+  const agentMap: Record<string, { agentName: string; total: number; callSeconds: number }> = {};
+  for (const c of matchingCases) {
+    const aName = c.agent?.fullName || 'Intake Agent';
+    if (!agentMap[aName]) agentMap[aName] = { agentName: aName, total: 0, callSeconds: 0 };
+    agentMap[aName].total += 1;
+    agentMap[aName].callSeconds += c.callLengthSeconds || 0;
+  }
+  const byAgent = Object.values(agentMap).map((a) => ({
+    agentName: a.agentName,
+    total: a.total,
+    avg: a.total > 0 ? fmtSeconds(Math.round(a.callSeconds / a.total)) : '00:00:00',
+  })).sort((a, b) => b.total - a.total);
 
   return (
     <State q={q}>
-      {s && (
-        <>
-          <Kpis
-            label="Team summary"
-            items={[
-              ['Total records', s.totalRecords],
-              ['Reviewed', s.reviewedRecords],
-              ['Modified', s.modifiedRecords],
-              ['Accepted', s.accepted],
-              ['Rejected', s.rejected],
-              ['Pending', s.pending],
-              ['Average call', fmtSeconds(s.callLength.averageSeconds)],
-            ]}
-          />
-          <Table
-            caption="Team performance by agent"
-            head={['Agent', 'Records', 'Average call length']}
-            rows={s.byAgent.map((a) => [a.agentName, a.total, fmtSeconds(a.averageCallSeconds)])}
-          />
-          <CustomerRecordsTable caption="Team customer records" cases={matchingCases} showCall />
-        </>
-      )}
+      <Kpis
+        label="Team summary"
+        items={[
+          ['Total cases', total],
+          ['Accepted cases', accepted],
+          ['Rejected cases', rejected],
+          ['Pending cases', pending],
+          ['Processed cases', processed],
+          ['Average call', fmtSeconds(avgCallSeconds)],
+        ]}
+      />
+      <Table
+        caption="Team performance by agent"
+        head={['Agent', 'Total Records', 'Average Call Length']}
+        rows={byAgent.map((a) => [a.agentName, a.total, a.avg])}
+      />
+      <CustomerRecordsTable caption="Team customer records" cases={matchingCases} showCall />
     </State>
   );
 }
 
-export function AdminView({ filters }: { filters: ListQuery }) {
+export function AdminView({ filters }: { filters: ListQuery & { search?: string } }) {
   const q = useQuery({
     queryKey: ['report', 'ADMIN', filters],
     queryFn: () => reportService.admin(filters),
@@ -281,7 +378,23 @@ export function AdminView({ filters }: { filters: ListQuery }) {
     refetchInterval: 3000,
   });
   const s = q.data?.data.summary;
-  const matchingCases = casesQ.data ?? [];
+  const allCases = casesQ.data ?? [];
+  let matchingCases = allCases;
+  const fromKey = toDateKey(filters.dateFrom);
+  const toKey = toDateKey(filters.dateTo);
+
+  if (fromKey) matchingCases = matchingCases.filter((c) => toDateKey(c.submittedAt) >= fromKey);
+  if (toKey) matchingCases = matchingCases.filter((c) => toDateKey(c.submittedAt) <= toKey);
+  if ((filters as any).search) {
+    const query = String((filters as any).search).toLowerCase().trim();
+    matchingCases = matchingCases.filter((c) => {
+      const name = `${c.customer?.firstName || ''} ${c.customer?.lastName || ''}`.toLowerCase();
+      const phone = (c.customer?.phone || '').toLowerCase();
+      const state = getCustomerState(c.customer).toLowerCase();
+      const zip = (c.customer?.zipCode || '').toLowerCase();
+      return name.includes(query) || phone.includes(query) || state.includes(query) || zip.includes(query);
+    });
+  }
 
   return (
     <State q={q}>
@@ -311,7 +424,7 @@ export function AdminView({ filters }: { filters: ListQuery }) {
   );
 }
 
-export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string; status?: string } }) {
+export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string; status?: string; search?: string } }) {
   const q = useQuery({
     queryKey: ['report', 'CEO_CASES'],
     queryFn: () => getUnifiedCases(),
@@ -319,23 +432,6 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
   });
 
   const allCases = q.data ?? [];
-
-  // Helper to normalize any date string (DD/MM/YYYY or YYYY-MM-DD) to YYYY-MM-DD for accurate comparison
-  function toDateKey(d?: string | number | null): string {
-    if (!d) return '';
-    const s = String(d).trim();
-    // DD/MM/YYYY or DD-MM-YYYY
-    const dmy = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
-    if (dmy) {
-      return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
-    }
-    // YYYY-MM-DD
-    const ymd = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
-    if (ymd) {
-      return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
-    }
-    return s.substring(0, 10);
-  }
 
   // Filter cases according to user criteria
   let cases = allCases;
@@ -363,6 +459,18 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
     } else {
       cases = cases.filter((c) => c.status === s);
     }
+  }
+  if ((filters as any).search) {
+    const query = String((filters as any).search).toLowerCase().trim();
+    cases = cases.filter((c) => {
+      const name = `${c.customer?.firstName || ''} ${c.customer?.lastName || ''}`.toLowerCase();
+      const phone = (c.customer?.phone || '').toLowerCase();
+      const state = getCustomerState(c.customer).toLowerCase();
+      const zip = (c.customer?.zipCode || '').toLowerCase();
+      const ssn = getCustomerSsnMbi(c.customer).toLowerCase();
+      const agent = (c.agent?.fullName || '').toLowerCase();
+      return name.includes(query) || phone.includes(query) || state.includes(query) || zip.includes(query) || ssn.includes(query) || agent.includes(query);
+    });
   }
 
   // Deduplicate cases by customer phone/id so each customer is shown only once and always with zipCode
@@ -403,7 +511,6 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
   const processed = accepted + rejected;
   const acceptanceRate = processed > 0 ? Math.round((accepted / processed) * 100) : 0;
   const rejectionRate = processed > 0 ? Math.round((rejected / processed) * 100) : 0;
-  const processingRate = total > 0 ? Math.round((processed / total) * 100) : 0;
 
   // Breakdown by Agent / User
   const agentMap: Record<
@@ -450,7 +557,7 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
       `"${c.customer?.dateOfBirth || '—'}"`,
       `"${getCustomerState(c.customer)}"`,
       `"${c.customer?.zipCode || '—'}"`,
-      `"${getCustomerSsnMbi(c.customer)}"`,
+      `"${maskSsnMbi(getCustomerSsnMbi(c.customer))}"`,
       `"${c.agent?.fullName || 'Intake Agent'}"`,
       `"${c.submittedAt ? new Date(c.submittedAt).toLocaleString() : '—'}"`,
       `"${c.callLengthDisplay || (c.callLengthSeconds ? formatCallSeconds(c.callLengthSeconds) : '—')}"`,
@@ -571,10 +678,10 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
 
           <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
             <div style={{ fontSize: 12, color: 'var(--muted, #64748b)', fontWeight: 600, textTransform: 'uppercase' }}>
-              Processed
+              Processed cases
             </div>
             <div style={{ fontSize: 28, fontWeight: 800, marginTop: 6, color: '#0d9488' }}>
-              {processingRate}%
+              {processed}
             </div>
           </div>
 
@@ -667,7 +774,7 @@ export function CeoCasesView({ filters }: { filters: ListQuery & { user?: string
                         <td>{calculateAge(c.customer?.dateOfBirth, (c.customer?.extra as any)?.age)}</td>
                         <td>{getCustomerState(c.customer)}</td>
                         <td>{c.customer?.zipCode || '—'}</td>
-                        <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{getCustomerSsnMbi(c.customer)}</td>
+                        <td style={{ fontSize: 13, color: 'var(--muted, #64748b)' }}>{maskSsnMbi(getCustomerSsnMbi(c.customer))}</td>
                         <td>{c.agent?.fullName || 'Intake Agent'}</td>
                         <td style={{ fontSize: 13, color: 'var(--muted, #94a3b8)' }}>{submitted}</td>
                         <td style={{ fontSize: 13 }}>{callLen}</td>

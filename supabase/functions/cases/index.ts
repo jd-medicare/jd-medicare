@@ -322,5 +322,127 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ data: { success: true, status } });
   }
 
+  // PATCH /:id (Edit Case & Customer Details)
+  if (req.method === 'PATCH' && subRoute === '') {
+    // RBAC: Allowed: Team Leader, Admin, Primary Super Admin. Denied: Outsource, regular Agent, read-only.
+    const isSuper = Boolean(
+      user.isPrimarySuperAdmin ||
+      user.roleKey === 'PRIMARY_SUPER_ADMIN' ||
+      user.roleKey === 'SUPER_ADMIN' ||
+      user.roleKey === 'ADMIN' ||
+      user.roleKey.includes('ADMIN')
+    );
+    const isTeamLeader = Boolean(user.roleKey === 'TEAM_LEADER' || user.roleKey.includes('TEAM_LEADER'));
+    const canEdit = (isSuper || isTeamLeader) && user.roleKey !== 'AGENT' && user.roleKey !== 'OUTSOURCE';
+
+    if (!canEdit) {
+      return errorResponse('FORBIDDEN', 'Only Team Leaders and Administrators have permission to edit customer details.');
+    }
+
+    const { data: targetCase } = await client
+      .from('cases')
+      .select('*, customer:customers(*)')
+      .eq('id', caseId)
+      .eq('organizationId', user.organizationId)
+      .maybeSingle();
+
+    if (!targetCase) return errorResponse('NOT_FOUND', 'Case not found');
+
+    const body = await req.json().catch(() => ({}));
+    const customerId = targetCase.customerId;
+
+    // Validate and check duplicate phone if updated
+    if (body.phone && body.phone !== targetCase.customer?.phone) {
+      const cleanPhone = String(body.phone).trim();
+      const digits = cleanPhone.replace(/\D/g, '');
+      if (digits.length < 7 || digits.length > 15) {
+        return errorResponse('VALIDATION_ERROR', 'Phone number must contain between 7 and 15 digits.');
+      }
+
+      const { data: existingPhone } = await client
+        .from('customers')
+        .select('id')
+        .eq('organizationId', user.organizationId)
+        .eq('phone', cleanPhone)
+        .neq('id', customerId)
+        .maybeSingle();
+
+      if (existingPhone) {
+        return errorResponse('PHONE_ALREADY_EXISTS', 'A customer with this phone number already exists.');
+      }
+    }
+
+    // Update customer table
+    const custUpdates: Record<string, any> = { updatedAt: new Date().toISOString() };
+    if (body.firstName !== undefined) custUpdates.firstName = String(body.firstName).trim();
+    if (body.lastName !== undefined) custUpdates.lastName = String(body.lastName).trim();
+    if (body.phone !== undefined) custUpdates.phone = String(body.phone).trim();
+    if (body.dateOfBirth !== undefined) custUpdates.dateOfBirth = body.dateOfBirth ? String(body.dateOfBirth).trim() : null;
+    if (body.zipCode !== undefined) custUpdates.zipCode = String(body.zipCode).trim();
+    if (body.state !== undefined) {
+      custUpdates.address = String(body.state).trim();
+    } else if (body.address !== undefined) {
+      custUpdates.address = String(body.address).trim();
+    }
+
+    const currentExtra = (targetCase.customer?.extra as Record<string, any>) || {};
+    const updatedExtra: Record<string, any> = { ...currentExtra, ...(body.extra || {}) };
+    if (body.ssnMbi !== undefined) updatedExtra.ssnMbi = body.ssnMbi ? String(body.ssnMbi).trim() : '';
+    if (body.age !== undefined) updatedExtra.age = body.age !== '' && body.age !== null ? Number(body.age) : null;
+    if (body.state !== undefined) updatedExtra.state = String(body.state).trim();
+    custUpdates.extra = updatedExtra;
+
+    await client
+      .from('customers')
+      .update(custUpdates)
+      .eq('id', customerId)
+      .eq('organizationId', user.organizationId);
+
+    // Update case table
+    const caseUpdates: Record<string, any> = { updatedAt: new Date().toISOString() };
+    if (body.agentId !== undefined && body.agentId) caseUpdates.agentId = body.agentId;
+    if (body.teamLeaderId !== undefined) caseUpdates.teamLeaderId = body.teamLeaderId || null;
+
+    if (Object.keys(caseUpdates).length > 1) {
+      await client
+        .from('cases')
+        .update(caseUpdates)
+        .eq('id', caseId)
+        .eq('organizationId', user.organizationId);
+    }
+
+    // Update call duration if provided
+    if (body.durationSeconds !== undefined && body.durationSeconds !== null && body.durationSeconds !== '') {
+      const dur = parseInt(String(body.durationSeconds), 10);
+      if (!isNaN(dur) && dur >= 0) {
+        await client
+          .from('call_records')
+          .upsert({
+            organizationId: user.organizationId,
+            caseId,
+            durationSeconds: dur,
+            setById: user.id,
+            updatedAt: new Date().toISOString(),
+          }, { onConflict: 'caseId' });
+      }
+    }
+
+    // Fetch updated complete case
+    const { data: updatedData } = await client
+      .from('cases')
+      .select(`
+        *,
+        customer:customers(*),
+        callRecord:call_records(*),
+        agent:agentId(id, fullName),
+        teamLeader:teamLeaderId(id, fullName)
+      `)
+      .eq('id', caseId)
+      .single();
+
+    return jsonResponse({ data: updatedData || targetCase });
+  }
+
   return errorResponse('NOT_FOUND', `Route not found: ${req.method} ${pathname}`);
 });
+

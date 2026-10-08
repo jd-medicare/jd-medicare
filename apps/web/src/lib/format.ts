@@ -105,3 +105,12 @@ export function getCustomerSsnMbi(customer?: { ssnMbi?: string | null; extra?: a
   return ssn ? String(ssn).trim() : '—';
 }
 
+/** Safely mask SSN or MBI for secure display (e.g. •••-••-6789) */
+export function maskSsnMbi(val?: string | null): string {
+  if (!val || val === '—') return '—';
+  const clean = String(val).trim();
+  if (clean.length <= 4) return clean;
+  const last4 = clean.slice(-4);
+  return `•••-••-${last4}`;
+}
+

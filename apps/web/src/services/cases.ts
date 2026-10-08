@@ -93,6 +93,75 @@ export const caseService = {
     return api.call('cases.get', { params: { id }, schema: CaseDto });
   },
 
+  updateDetails: async (
+    id: string,
+    form: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      dateOfBirth?: string | null;
+      age?: string | number | null;
+      state?: string;
+      address?: string;
+      zipCode?: string;
+      ssnMbi?: string;
+      agentId?: string;
+      teamLeaderId?: string | null;
+      durationSeconds?: number | null;
+    }
+  ) => {
+    // 1. If call length is provided, persist locally
+    if (form.durationSeconds !== undefined && form.durationSeconds !== null) {
+      setLocalCallLength(id, form.durationSeconds);
+    }
+
+    // 2. Call backend cases.update or fallback to customers.update
+    let res: any = null;
+    try {
+      res = await api.call('cases.update', {
+        params: { id },
+        body: form,
+        schema: z.any(),
+      });
+    } catch {
+      try {
+        res = await api.call('customers.update', {
+          params: { id },
+          body: form,
+          schema: z.any(),
+        });
+      } catch (e) {
+        throw e;
+      }
+    }
+
+    // 3. Update unified memory/local storage cache
+    try {
+      const all = await getUnifiedCases();
+      const match = all.find((c) => c.id === id || c.customer?.id === id);
+      if (match && match.customer) {
+        const updatedCust = {
+          ...match.customer,
+          firstName: form.firstName ?? match.customer.firstName,
+          lastName: form.lastName ?? match.customer.lastName,
+          phone: form.phone ?? match.customer.phone,
+          dateOfBirth: form.dateOfBirth !== undefined ? form.dateOfBirth : match.customer.dateOfBirth,
+          address: form.state ?? form.address ?? match.customer.address,
+          zipCode: form.zipCode ?? match.customer.zipCode,
+          extra: {
+            ...((match.customer.extra as any) || {}),
+            ssnMbi: form.ssnMbi !== undefined ? form.ssnMbi : (match.customer.extra as any)?.ssnMbi,
+            state: form.state ?? (match.customer.extra as any)?.state,
+            age: form.age !== undefined ? form.age : (match.customer.extra as any)?.age,
+          },
+        };
+        saveLocallyRegisteredCustomer(updatedCust as any);
+      }
+    } catch {}
+
+    return res;
+  },
+
   setCallLength: async (id: string, durationSeconds: number) => {
     // 1. Immediately store in local state under given id
     setLocalCallLength(id, durationSeconds);

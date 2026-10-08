@@ -215,20 +215,95 @@ Deno.serve(async (req: Request) => {
 
   // PATCH /:id
   if (req.method === 'PATCH' && subRoute === '') {
-    const permErr = requirePermission(user, 'user:update');
-    if (permErr) return permErr;
+    // Authorization: ADMIN or PRIMARY_SUPER_ADMIN
+    const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey === 'PRIMARY_SUPER_ADMIN');
+    const isAdmin = Boolean(isSuper || user.roleKey === 'ADMIN' || user.permissions.includes('user:update') || user.permissions.includes('*'));
+    if (!isAdmin) {
+      return errorResponse('FORBIDDEN', 'Only authorized administrators can edit user details');
+    }
+
+    const { data: targetUser, error: targetErr } = await client
+      .from('users')
+      .select('id, organizationId, email, fullName, isPrimarySuperAdmin')
+      .eq('id', targetId)
+      .eq('organizationId', user.organizationId)
+      .maybeSingle();
+
+    if (targetErr || !targetUser) return errorResponse('NOT_FOUND', 'User not found');
+
+    // Protected PSA check: ordinary administrators cannot modify Primary Super Admin
+    if (targetUser.isPrimarySuperAdmin && !isSuper) {
+      return errorResponse('PROTECTED_USER', 'The Primary Super Admin account cannot be modified by ordinary administrators');
+    }
 
     const body = await req.json().catch(() => ({}));
     const updateData: Record<string, any> = {};
-    if (body.fullName !== undefined) updateData.fullName = body.fullName;
-    if (body.phone !== undefined) updateData.phone = body.phone;
+
+    if (body.fullName !== undefined) {
+      const trimmedName = String(body.fullName || '').trim();
+      if (!trimmedName) {
+        return errorResponse('VALIDATION_ERROR', 'Full name is required');
+      }
+      updateData.fullName = trimmedName;
+    }
+
+    if (body.email !== undefined) {
+      const cleanEmail = String(body.email || '').trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+        return errorResponse('VALIDATION_ERROR', 'A valid email address is required');
+      }
+
+      // Check case-insensitive email uniqueness excluding targetId
+      const { data: existingUser } = await client
+        .from('users')
+        .select('id')
+        .eq('organizationId', user.organizationId)
+        .ilike('email', cleanEmail)
+        .neq('id', targetId)
+        .maybeSingle();
+
+      if (existingUser) {
+        return errorResponse('DUPLICATE_EMAIL', 'A user with this email address already exists');
+      }
+
+      updateData.email = cleanEmail;
+
+      // Update Supabase Auth email if changed
+      if (cleanEmail !== targetUser.email?.toLowerCase()) {
+        try {
+          await client.auth.admin.updateUserById(targetId, {
+            email: cleanEmail,
+            email_confirm: true,
+          });
+        } catch (authErr: any) {
+          console.warn('Supabase auth email update warning:', authErr?.message || authErr);
+        }
+      }
+    }
+
+    if (body.phone !== undefined) {
+      updateData.phone = body.phone ? String(body.phone).trim() : null;
+    }
+
+    if (updateData.fullName) {
+      try {
+        await client.auth.admin.updateUserById(targetId, {
+          user_metadata: { fullName: updateData.fullName },
+        });
+      } catch (authErr: any) {
+        console.warn('Supabase auth metadata update warning:', authErr?.message || authErr);
+      }
+    }
+
+    updateData.updatedAt = new Date().toISOString();
 
     const { data, error } = await client
       .from('users')
       .update(updateData)
       .eq('id', targetId)
       .eq('organizationId', user.organizationId)
-      .select()
+      .select('id, organizationId, email, fullName, phone, status, roleId, isPrimarySuperAdmin, menusCustomized, createdAt, updatedAt')
       .single();
 
     if (error) return errorResponse('VALIDATION_ERROR', error.message);
@@ -315,6 +390,11 @@ Deno.serve(async (req: Request) => {
     const permErr = requirePermission(user, 'role:manage');
     if (permErr) return permErr;
 
+    const { data: target } = await client.from('users').select('isPrimarySuperAdmin').eq('id', targetId).maybeSingle();
+    if (target?.isPrimarySuperAdmin && !user.isPrimarySuperAdmin && user.roleKey !== 'PRIMARY_SUPER_ADMIN') {
+      return errorResponse('PROTECTED_USER', 'The Primary Super Admin role cannot be modified');
+    }
+
     const body = await req.json().catch(() => ({}));
     if (!body.roleId) return errorResponse('VALIDATION_ERROR', 'roleId is required');
 
@@ -335,6 +415,11 @@ Deno.serve(async (req: Request) => {
     const permErr = requirePermission(user, 'permission:manage');
     if (permErr) return permErr;
 
+    const { data: target } = await client.from('users').select('isPrimarySuperAdmin').eq('id', targetId).maybeSingle();
+    if (target?.isPrimarySuperAdmin && !user.isPrimarySuperAdmin && user.roleKey !== 'PRIMARY_SUPER_ADMIN') {
+      return errorResponse('PROTECTED_USER', 'The Primary Super Admin permissions cannot be modified');
+    }
+
     const body = await req.json().catch(() => ({}));
     const permissionIds: string[] = body.permissionIds || [];
 
@@ -351,6 +436,11 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'PUT' && subRoute === '/menus') {
     const permErr = requirePermission(user, 'menu:manage');
     if (permErr) return permErr;
+
+    const { data: target } = await client.from('users').select('isPrimarySuperAdmin').eq('id', targetId).maybeSingle();
+    if (target?.isPrimarySuperAdmin && !user.isPrimarySuperAdmin && user.roleKey !== 'PRIMARY_SUPER_ADMIN') {
+      return errorResponse('PROTECTED_USER', 'The Primary Super Admin menus cannot be modified');
+    }
 
     const body = await req.json().catch(() => ({}));
     const rawMenus: string[] = body.menus || [];

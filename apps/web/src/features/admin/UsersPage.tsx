@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/admin';
@@ -9,6 +9,7 @@ import type { SessionUserDto } from '../../schemas';
 import type { UserDto } from '../../schemas/domain';
 import {
   CreateUserDialog,
+  EditUserDialog,
   MenusDialog,
   PermissionsDialog,
   ReasonDialog,
@@ -26,6 +27,7 @@ export default function UsersPage({ user }: { user: SessionUserDto }) {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editU, setEditU] = useState<UserDto | null>(null);
   const [perm, setPerm] = useState<UserDto | null>(null);
   const [menuU, setMenuU] = useState<UserDto | null>(null);
   const [roleU, setRoleU] = useState<UserDto | null>(null);
@@ -235,54 +237,21 @@ export default function UsersPage({ user }: { user: SessionUserDto }) {
                   </td>
                   <td>{fmtDateTime(u.lastLoginAt)}</td>
                   <td>
-                    {isPSA ? (
-                      <span className="badge b-ACTIVE" title="Primary Super Admin has full built-in access to all menus and permissions">
-                        Protected
-                      </span>
-                    ) : (
-                      <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {has('user:lock') && u.status === 'ACTIVE' && (
-                          <button className="btn" aria-label={`Lock ${u.fullName}`} onClick={() => setLock({ u, kind: 'lock' })}>
-                            Lock
-                          </button>
-                        )}
-                        {has('user:unlock') && u.status === 'LOCKED' && (
-                          <button className="btn" aria-label={`Unlock ${u.fullName}`} onClick={() => setLock({ u, kind: 'unlock' })}>
-                            Unlock
-                          </button>
-                        )}
-                        {isAgent && (
-                          <button
-                            className="btn"
-                            style={{ borderColor: 'var(--primary, #3b82f6)' }}
-                            aria-label={`Assign Team Leader for ${u.fullName}`}
-                            onClick={() => setAssignTarget(u)}
-                          >
-                            Assign TL
-                          </button>
-                        )}
-                        {has('role:manage') && (
-                          <button className="btn" aria-label={`Change role of ${u.fullName}`} onClick={() => setRoleU(u)}>
-                            Role
-                          </button>
-                        )}
-                        {has('menu:manage') && (
-                          <button className="btn" aria-label={`Edit menus for ${u.fullName}`} onClick={() => setMenuU(u)}>
-                            Menus
-                          </button>
-                        )}
-                        {has('permission:manage') && (
-                          <button className="btn" aria-label={`Edit permissions for ${u.fullName}`} onClick={() => setPerm(u)}>
-                            Permissions
-                          </button>
-                        )}
-                        {has('user:update') && (
-                          <button className="btn" aria-label={`Reset password for ${u.fullName}`} onClick={() => setResetU(u)}>
-                            Reset password
-                          </button>
-                        )}
-                      </span>
-                    )}
+                    <UserRowActions
+                      u={u}
+                      isPSA={isPSA}
+                      isSuper={isSuper}
+                      isAgent={isAgent}
+                      canEdit={isSuper || user.roleKey === 'ADMIN' || has('user:update')}
+                      has={has}
+                      onEdit={() => setEditU(u)}
+                      onRole={() => setRoleU(u)}
+                      onAssignTl={() => setAssignTarget(u)}
+                      onMenus={() => setMenuU(u)}
+                      onPerms={() => setPerm(u)}
+                      onResetPwd={() => setResetU(u)}
+                      onLockUnlock={() => setLock({ u, kind: u.status === 'LOCKED' ? 'unlock' : 'lock' })}
+                    />
                   </td>
                 </tr>
               );
@@ -294,6 +263,7 @@ export default function UsersPage({ user }: { user: SessionUserDto }) {
       <Pager meta={list.data?.meta} page={page} onPage={setPage} />
 
       <CreateUserDialog open={creating} onClose={() => setCreating(false)} canMenus={has('menu:manage')} />
+      <EditUserDialog target={editU} onClose={() => setEditU(null)} />
       <MenusDialog target={menuU} onClose={() => setMenuU(null)} />
       <RoleDialog target={roleU} onClose={() => setRoleU(null)} />
       <PermissionsDialog target={perm} onClose={() => setPerm(null)} />
@@ -386,5 +356,192 @@ function AssignTeamLeaderDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function UserRowActions({
+  u,
+  isPSA,
+  isSuper,
+  isAgent,
+  canEdit,
+  has,
+  onEdit,
+  onRole,
+  onAssignTl,
+  onMenus,
+  onPerms,
+  onResetPwd,
+  onLockUnlock,
+}: {
+  u: UserDto;
+  isPSA: boolean;
+  isSuper: boolean;
+  isAgent: boolean;
+  canEdit: boolean;
+  has: (p: string) => boolean;
+  onEdit: () => void;
+  onRole: () => void;
+  onAssignTl: () => void;
+  onMenus: () => void;
+  onPerms: () => void;
+  onResetPwd: () => void;
+  onLockUnlock: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [open]);
+
+  // Protected Primary Super Admin: ordinary administrators cannot modify or lock
+  if (isPSA && !isSuper) {
+    return (
+      <span className="badge b-ACTIVE" title="Primary Super Admin root account is protected">
+        Protected
+      </span>
+    );
+  }
+
+  return (
+    <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {isPSA && (
+          <span className="badge b-ACTIVE" style={{ fontSize: 11 }}>
+            Protected
+          </span>
+        )}
+        <button
+          type="button"
+          className="btn"
+          style={{ padding: '3px 10px', fontSize: 12, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          onClick={() => setOpen(!open)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          Actions ▾
+        </button>
+      </div>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 'calc(100% + 4px)',
+            zIndex: 60,
+            minWidth: 195,
+            background: 'var(--surface, #1e293b)',
+            border: '1px solid var(--border, #334155)',
+            borderRadius: 'var(--radius-sm, 8px)',
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3)',
+            padding: '4px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          {canEdit && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left' }}
+              onClick={() => { setOpen(false); onEdit(); }}
+            >
+              ✏️ Edit User
+            </button>
+          )}
+
+          {!isPSA && has('role:manage') && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left' }}
+              onClick={() => { setOpen(false); onRole(); }}
+            >
+              👤 Assign Role
+            </button>
+          )}
+
+          {isAgent && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left' }}
+              onClick={() => { setOpen(false); onAssignTl(); }}
+            >
+              👥 Assign Team Leader
+            </button>
+          )}
+
+          {!isPSA && has('menu:manage') && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left' }}
+              onClick={() => { setOpen(false); onMenus(); }}
+            >
+              📋 Manage Menus
+            </button>
+          )}
+
+          {!isPSA && has('permission:manage') && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left' }}
+              onClick={() => { setOpen(false); onPerms(); }}
+            >
+              🔑 Manage Permissions
+            </button>
+          )}
+
+          {!isPSA && has('user:update') && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left' }}
+              onClick={() => { setOpen(false); onResetPwd(); }}
+            >
+              🔒 Reset Password
+            </button>
+          )}
+
+          <div style={{ height: 1, background: 'var(--border, #334155)', margin: '2px 0' }} />
+
+          {!isPSA && has('user:lock') && u.status === 'ACTIVE' && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left', color: 'var(--danger, #ef4444)' }}
+              onClick={() => { setOpen(false); onLockUnlock(); }}
+            >
+              🚫 Lock Account
+            </button>
+          )}
+
+          {!isPSA && has('user:unlock') && u.status === 'LOCKED' && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13, textAlign: 'left', color: 'var(--success, #22c55e)' }}
+              onClick={() => { setOpen(false); onLockUnlock(); }}
+            >
+              🔓 Unlock Account
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

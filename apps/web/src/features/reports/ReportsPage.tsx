@@ -32,6 +32,7 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
   const [dateToInput, setDateToInput] = useState('');
   const [userInput, setUserInput] = useState('');
   const [statusInput, setStatusInput] = useState('');
+  const [searchInput, setSearchInput] = useState('');
 
   const casesQuery = useQuery({ queryKey: ['cases-for-reports'], queryFn: () => caseService.list({ page: 1, pageSize: 100 }) });
   const usersQuery = useQuery({
@@ -70,12 +71,14 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
     dateTo: string;
     user: string;
     status: string;
+    search: string;
   }>({
     type: types[0] ?? 'CEO_CASES',
     dateFrom: '',
     dateTo: '',
     user: '',
     status: '',
+    search: '',
   });
 
   const filters: Record<string, string> = {};
@@ -83,6 +86,7 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
   if (applied.dateTo) filters.dateTo = applied.dateTo;
   if (applied.user) filters.user = applied.user;
   if (applied.status) filters.status = applied.status;
+  if (applied.search) filters.search = applied.search;
 
   const badRange = !!applied.dateFrom && !!applied.dateTo && applied.dateFrom > applied.dateTo;
 
@@ -94,6 +98,7 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
       dateTo: dateToInput,
       user: userInput.trim(),
       status: statusInput.trim(),
+      search: searchInput.trim(),
     });
   }
 
@@ -102,12 +107,14 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
     setDateToInput('');
     setUserInput('');
     setStatusInput('');
+    setSearchInput('');
     setApplied({
       type: typeInput,
       dateFrom: '',
       dateTo: '',
       user: '',
       status: '',
+      search: '',
     });
   }
 
@@ -224,6 +231,21 @@ export default function ReportsPage({ user }: { user: SessionUserDto }) {
                 <option value="ACCEPTED">Accepted</option>
                 <option value="REJECTED">Rejected</option>
               </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 160, flex: '1 1 160px' }}>
+              <label htmlFor="report-search" style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--muted, #94a3b8)' }}>
+                Search
+              </label>
+              <input
+                id="report-search"
+                className="input"
+                type="text"
+                placeholder="Search phone, state, zip…"
+                style={{ height: 40, boxSizing: 'border-box', width: '100%' }}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+              />
             </div>
 
             <div style={{ display: 'flex', gap: 8, height: 40, alignItems: 'center' }}>

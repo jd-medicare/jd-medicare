@@ -546,3 +546,70 @@ export function ResetPasswordDialog({ target, onClose }: { target: UserDto | nul
     </Dialog>
   );
 }
+
+export function EditUserDialog({ target, onClose }: { target: UserDto | null; onClose: () => void }) {
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [err, setErr] = useState<Record<string, string>>({});
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    if (target) {
+      setFullName(target.fullName || '');
+      setEmail(target.email || '');
+      setErr({});
+    }
+  }, [target]);
+
+  const m = useMutation<any>({
+    mutationFn: () => adminService.updateUser(target!.id, { fullName, email }),
+    onSuccess: () => {
+      recordAudit('USER_UPDATED', 'user', target!.id, {
+        before: { fullName: target!.fullName, email: target!.email },
+        after: { fullName, email },
+      });
+      qc.invalidateQueries({ queryKey: ['users'] });
+      notifyLiveSync('user-updated');
+      onClose();
+    },
+  });
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const x: Record<string, string> = {};
+    if (!fullName.trim()) x.fullName = 'Full name is required.';
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) x.email = 'Email address is required.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) x.email = 'Please enter a valid email address.';
+    setErr(x);
+    if (!Object.keys(x).length) m.mutate();
+  }
+
+  return (
+    <Dialog open={!!target} title="Edit user details" onClose={onClose}>
+      {target && (
+        <form onSubmit={submit} noValidate>
+          <TextField
+            label="Full name"
+            required
+            autoComplete="name"
+            value={fullName}
+            onChange={setFullName}
+            error={err.fullName}
+          />
+          <TextField
+            label="Email address"
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={setEmail}
+            error={err.email}
+          />
+          {m.isError && <p className="err" role="alert">{errorMessage(m.error)}</p>}
+          <Actions onClose={onClose} busy={m.isPending} label="Save Changes" />
+        </form>
+      )}
+    </Dialog>
+  );
+}

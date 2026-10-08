@@ -82,6 +82,92 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // 1b. Income Heads
+  if (pathname === '/income-heads' || pathname.startsWith('/income-heads/')) {
+    if (req.method === 'GET' && pathname === '/income-heads') {
+      const permErr = requirePermission(user, 'finance:view');
+      if (permErr) return permErr;
+
+      const { data, error } = await client
+        .from('income_heads')
+        .select('*')
+        .eq('organizationId', user.organizationId)
+        .order('name');
+
+      if (error) return errorResponse('VALIDATION_ERROR', error.message);
+      return jsonResponse({ data: data || [] });
+    }
+
+    if (req.method === 'POST' && pathname === '/income-heads') {
+      const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey.includes('ADMIN'));
+      if (!isSuper) {
+        const permErr = requirePermission(user, 'income:create');
+        if (permErr) return permErr;
+      }
+
+      const body = await req.json().catch(() => ({}));
+      const name = (body.name || '').trim();
+      if (!name) return errorResponse('VALIDATION_ERROR', 'Income head name is required');
+
+      const nameKey = name.toLowerCase();
+      // Prevent duplicate category names
+      const { data: existing } = await client
+        .from('income_heads')
+        .select('id')
+        .eq('organizationId', user.organizationId)
+        .eq('nameKey', nameKey)
+        .maybeSingle();
+
+      if (existing) {
+        return errorResponse('VALIDATION_ERROR', 'An income head with this name already exists.');
+      }
+
+      const { data, error } = await client
+        .from('income_heads')
+        .insert({
+          organizationId: user.organizationId,
+          name,
+          nameKey,
+          isActive: body.isActive !== undefined ? body.isActive : true,
+        })
+        .select()
+        .single();
+
+      if (error) return errorResponse('VALIDATION_ERROR', error.message);
+      return jsonResponse({ data }, 201);
+    }
+
+    const headMatch = pathname.match(/^\/income-heads\/([0-9a-fA-F-]+)$/);
+    if (req.method === 'PATCH' && headMatch) {
+      const isSuper = Boolean(user.isPrimarySuperAdmin || user.roleKey.includes('ADMIN'));
+      if (!isSuper) {
+        const permErr = requirePermission(user, 'income:update');
+        if (permErr) return permErr;
+      }
+
+      const headId = headMatch[1];
+      const body = await req.json().catch(() => ({}));
+      const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
+      if (body.name) {
+        const cleanName = body.name.trim();
+        updates.name = cleanName;
+        updates.nameKey = cleanName.toLowerCase();
+      }
+      if (body.isActive !== undefined) updates.isActive = body.isActive;
+
+      const { data, error } = await client
+        .from('income_heads')
+        .update(updates)
+        .eq('id', headId)
+        .eq('organizationId', user.organizationId)
+        .select()
+        .single();
+
+      if (error) return errorResponse('VALIDATION_ERROR', error.message);
+      return jsonResponse({ data });
+    }
+  }
+
   // 2. Incomes
   if (pathname === '/income' || pathname.startsWith('/income/')) {
     if (req.method === 'GET' && pathname === '/income') {
@@ -89,7 +175,7 @@ Deno.serve(async (req: Request) => {
       if (permErr) return permErr;
 
       const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
-      const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20')));
+      const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '25')));
       const offset = (page - 1) * limit;
 
       let query = client
@@ -101,6 +187,23 @@ Deno.serve(async (req: Request) => {
 
       const status = url.searchParams.get('status');
       if (status) query = query.eq('status', status);
+
+      const dateFrom = url.searchParams.get('dateFrom');
+      if (dateFrom) query = query.gte('date', dateFrom);
+
+      const dateTo = url.searchParams.get('dateTo');
+      if (dateTo) query = query.lte('date', dateTo);
+
+      const incomeHeadId = url.searchParams.get('incomeHeadId');
+      if (incomeHeadId) query = query.eq('incomeHeadId', incomeHeadId);
+
+      const category = url.searchParams.get('category');
+      if (category) query = query.eq('category', category);
+
+      const search = url.searchParams.get('search');
+      if (search) {
+        query = query.or(`category.ilike.%${search}%,description.ilike.%${search}%,reference.ilike.%${search}%`);
+      }
 
       const { data, count, error } = await query;
       if (error) return errorResponse('VALIDATION_ERROR', error.message);
@@ -116,22 +219,51 @@ Deno.serve(async (req: Request) => {
       if (permErr) return permErr;
 
       const body = await req.json().catch(() => ({}));
-      const { amount, currency, date, category, reference, description, relatedCaseId } = body;
-      if (!amount || amount <= 0 || !category || !date) {
-        return errorResponse('VALIDATION_ERROR', 'Amount, date, and category are required');
+      const { amount, currency, date, fromDate, toDate, incomeHeadId, reference, description, relatedCaseId } = body;
+      let category = (body.category || '').trim();
+
+      // Resolve category from incomeHeadId if not directly provided
+      if (incomeHeadId && !category) {
+        const { data: headRow } = await client
+          .from('income_heads')
+          .select('name')
+          .eq('id', incomeHeadId)
+          .eq('organizationId', user.organizationId)
+          .maybeSingle();
+        if (headRow?.name) {
+          category = headRow.name;
+        }
+      }
+
+      if (!category) {
+        return errorResponse('VALIDATION_ERROR', 'A valid Income Head is required');
+      }
+
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount <= 0) {
+        return errorResponse('VALIDATION_ERROR', 'Amount must be a positive number');
+      }
+
+      // Validate date duration
+      const effectiveDate = date || fromDate || new Date().toISOString().substring(0, 10);
+      if (fromDate && toDate && fromDate > toDate) {
+        return errorResponse('VALIDATION_ERROR', 'From Date cannot exceed To Date');
       }
 
       const { data: income, error } = await client
         .from('incomes')
         .insert({
           organizationId: user.organizationId,
-          amount,
+          amount: numAmount,
           currency: currency || 'PKR',
-          date,
+          date: effectiveDate,
+          fromDate: fromDate || effectiveDate,
+          toDate: toDate || effectiveDate,
+          incomeHeadId: incomeHeadId || null,
           category,
-          reference,
-          description,
-          relatedCaseId,
+          reference: reference || null,
+          description: description || null,
+          relatedCaseId: relatedCaseId || null,
           createdById: user.id,
         })
         .select()
