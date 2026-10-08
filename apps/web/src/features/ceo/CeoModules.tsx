@@ -1,13 +1,13 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
-import { fmtSeconds } from '../../lib/format';
+import { fmtSeconds, fmtDateTime } from '../../lib/format';
 import type { CeoDashboardDto } from '../../schemas/domain';
 import type { TxRow } from '../../services/finance';
 import type { CaseDto } from '../../schemas';
 
-// SVG Icons
-export const ChartIcon = ({ size = 20, color = 'currentColor' }: { size?: number; color?: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+// --- Executive SVG Icons ---
+export const ChartIcon = ({ size = 18, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
     <line x1="18" y1="20" x2="18" y2="10" />
     <line x1="12" y1="20" x2="12" y2="4" />
     <line x1="6" y1="20" x2="6" y2="14" />
@@ -29,15 +29,6 @@ export const GearIcon = ({ size = 18, color = 'currentColor' }: { size?: number;
   </svg>
 );
 
-export const CalendarIcon = ({ size = 18, color = 'currentColor' }: { size?: number; color?: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-    <line x1="16" y1="2" x2="16" y2="6" />
-    <line x1="8" y1="2" x2="8" y2="6" />
-    <line x1="3" y1="10" x2="21" y2="10" />
-  </svg>
-);
-
 export const UsersIcon = ({ size = 18, color = 'currentColor' }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -47,17 +38,16 @@ export const UsersIcon = ({ size = 18, color = 'currentColor' }: { size?: number
   </svg>
 );
 
+export const ShieldIcon = ({ size = 18, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+  </svg>
+);
+
 export const DocIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <polyline points="14 2 14 8 20 8" />
-  </svg>
-);
-
-export const ClockIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10" />
-    <polyline points="12 6 12 12 16 14" />
   </svg>
 );
 
@@ -74,11 +64,10 @@ export const CrossIcon = ({ size = 14, color = 'currentColor' }: { size?: number
   </svg>
 );
 
-export const RefreshIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+export const ClockIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="23 4 23 10 17 10" />
-    <polyline points="1 20 1 14 7 14" />
-    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
   </svg>
 );
 
@@ -89,330 +78,569 @@ export interface HeadBreakdownItem {
   share: number;
 }
 
-// ModuleTabs Component
-export function ModuleTabs({
-  tabs,
-  activeTab,
-  onTabChange,
+// --- 1. Primary Executive Navigation Tabs ---
+export type CeoView = 'OVERVIEW' | 'FINANCE' | 'OPERATIONS' | 'AGENTS' | 'AUDIT';
+
+export function ExecutiveNavigation({
+  activeView,
+  onSelectView,
 }: {
-  tabs: Array<{ id: string; label: string; icon?: React.ReactNode }>;
-  activeTab: string;
-  onTabChange: (id: string) => void;
+  activeView: CeoView;
+  onSelectView: (v: CeoView) => void;
 }) {
+  const views: Array<{ id: CeoView; label: string; icon: React.ReactNode; desc: string }> = [
+    { id: 'OVERVIEW', label: 'Executive Summary', icon: <ChartIcon size={18} />, desc: 'High-level KPIs & performance trends' },
+    { id: 'FINANCE', label: 'Finance & Ledger', icon: <CoinsIcon size={18} />, desc: 'Income, expenses & cash flow' },
+    { id: 'OPERATIONS', label: 'Operations & Cases', icon: <GearIcon size={18} />, desc: 'Intake, status & case pipeline' },
+    { id: 'AGENTS', label: 'Agent & Team Metrics', icon: <UsersIcon size={18} />, desc: 'Productivity & call analytics' },
+    { id: 'AUDIT', label: 'Audit & Compliance', icon: <ShieldIcon size={18} />, desc: 'System events & activity trail' },
+  ];
+
   return (
-    <div
-      role="tablist"
+    <nav
+      aria-label="Executive Navigation"
       style={{
         display: 'flex',
         gap: 8,
-        borderBottom: '1px solid var(--border)',
+        background: 'var(--card-bg, #ffffff)',
+        padding: '6px 8px',
+        borderRadius: 14,
+        border: '1px solid var(--border)',
+        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)',
         marginBottom: 20,
         overflowX: 'auto',
-        paddingBottom: 2,
       }}
     >
-      {tabs.map((tab) => {
-        const isActive = activeTab === tab.id;
+      {views.map((v) => {
+        const isActive = activeView === v.id;
         return (
           <button
-            key={tab.id}
+            key={v.id}
             type="button"
-            role="tab"
-            aria-selected={isActive}
-            onClick={() => onTabChange(tab.id)}
+            onClick={() => onSelectView(v.id)}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 8,
+              gap: 10,
               padding: '10px 18px',
-              fontSize: 14,
-              fontWeight: isActive ? 700 : 500,
-              color: isActive ? 'var(--primary, #461440)' : 'var(--muted, #64748b)',
-              background: isActive ? 'rgba(70, 20, 64, 0.08)' : 'transparent',
+              borderRadius: 10,
               border: 'none',
-              borderBottom: isActive ? '3px solid var(--primary, #461440)' : '3px solid transparent',
-              borderRadius: '8px 8px 0 0',
+              background: isActive ? '#461440' : 'transparent',
+              color: isActive ? '#ffffff' : 'var(--foreground)',
+              fontSize: 13,
+              fontWeight: isActive ? 700 : 500,
               cursor: 'pointer',
-              transition: 'all 0.2s ease',
+              transition: 'all 0.15s ease',
               whiteSpace: 'nowrap',
+              boxShadow: isActive ? '0 4px 12px rgba(70, 20, 64, 0.25)' : 'none',
             }}
           >
-            {tab.icon}
-            {tab.label}
+            <span style={{ color: isActive ? '#ffffff' : 'var(--primary, #461440)' }}>{v.icon}</span>
+            <span>{v.label}</span>
           </button>
         );
       })}
+    </nav>
+  );
+}
+
+// --- 2. Executive Overview (Clutter-Free Landing View) ---
+export function ExecutiveOverview({
+  dashboard,
+  onNavigate,
+}: {
+  dashboard: any;
+  onNavigate: (v: CeoView) => void;
+}) {
+  const f = dashboard.finance;
+  const ops = dashboard.operations;
+  const p = dashboard.people;
+  const cl = dashboard.callLength;
+
+  const netNum = f ? parseFloat(f.netPosition) || 0 : 0;
+  const isNetPositive = netNum >= 0;
+
+  return (
+    <div style={{ display: 'grid', gap: 24 }}>
+      {/* High-Level Executive Summary Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+        {/* Income Card */}
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            borderRadius: 14,
+            border: '1px solid var(--border)',
+            background: 'var(--card-bg, #ffffff)',
+            cursor: 'pointer',
+          }}
+          onClick={() => onNavigate('FINANCE')}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Total Revenue / Income</span>
+            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: 'rgba(34, 197, 94, 0.15)', color: '#16a34a' }}>
+              + Active
+            </span>
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: '#16a34a', marginTop: 10 }}>
+            {f ? f.totalIncome : '0'} {f?.currency || 'PKR'}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+            <span>Monthly cash inflows</span>
+            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>Ledger details →</span>
+          </div>
+        </div>
+
+        {/* Expenses Card */}
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            borderRadius: 14,
+            border: '1px solid var(--border)',
+            background: 'var(--card-bg, #ffffff)',
+            cursor: 'pointer',
+          }}
+          onClick={() => onNavigate('FINANCE')}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Total Operating Expenses</span>
+            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
+              Outflow
+            </span>
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: '#ef4444', marginTop: 10 }}>
+            {f ? f.totalExpenses : '0'} {f?.currency || 'PKR'}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+            <span>Verified head expenditures</span>
+            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>Head breakdown →</span>
+          </div>
+        </div>
+
+        {/* Net Profit / Position Card */}
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            borderRadius: 14,
+            border: '1px solid var(--border)',
+            background: 'var(--card-bg, #ffffff)',
+            cursor: 'pointer',
+          }}
+          onClick={() => onNavigate('FINANCE')}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Net Profit / Position</span>
+            <span
+              style={{
+                padding: '2px 8px',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 700,
+                background: isNetPositive ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                color: isNetPositive ? '#16a34a' : '#ef4444',
+              }}
+            >
+              {isNetPositive ? 'Surplus' : 'Deficit'}
+            </span>
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: isNetPositive ? '#16a34a' : '#ef4444', marginTop: 10 }}>
+            {f ? f.netPosition : '0'} {f?.currency || 'PKR'}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+            <span>Net cash balance</span>
+            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>Financial reports →</span>
+          </div>
+        </div>
+
+        {/* Case Intake & Resolution Card */}
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            borderRadius: 14,
+            border: '1px solid var(--border)',
+            background: 'var(--card-bg, #ffffff)',
+            cursor: 'pointer',
+          }}
+          onClick={() => onNavigate('OPERATIONS')}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Total Case Pipeline</span>
+            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: 'rgba(14, 165, 233, 0.15)', color: '#0284c7' }}>
+              {ops.acceptanceRate}% Rate
+            </span>
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--foreground)', marginTop: 10 }}>
+            {ops.totalRecords.toLocaleString()} <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--secondary)' }}>cases</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+            <span>{ops.accepted} accepted • {ops.pending} pending</span>
+            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>Case reports →</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Monthly Financial Trend & Operational Health Summary */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 20 }}>
+        {/* Monthly Performance Trend */}
+        <div
+          className="card"
+          style={{
+            padding: 24,
+            borderRadius: 14,
+            border: '1px solid var(--border)',
+            background: 'var(--card-bg, #ffffff)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Monthly Financial Trend</h3>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+                Comparison of monthly revenue vs expenditures
+              </p>
+            </div>
+            <button type="button" className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => onNavigate('FINANCE')}>
+              View Ledger →
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gap: 12 }}>
+            {dashboard.trends.incomeVsExpenseByMonth.slice(0, 4).map((row: any) => {
+              const inc = parseFloat(row.income) || 0;
+              const exp = parseFloat(row.expenses) || 0;
+              const max = Math.max(inc, exp, 1);
+              const incPct = Math.min(100, Math.round((inc / max) * 100));
+              const expPct = Math.min(100, Math.round((exp / max) * 100));
+
+              return (
+                <div key={row.month} style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--surface-muted, #f8fafc)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                    <span>{row.month}</span>
+                    <span>
+                      <strong style={{ color: '#16a34a' }}>+{inc.toLocaleString()}</strong> /{' '}
+                      <strong style={{ color: '#ef4444' }}>-{exp.toLocaleString()}</strong>
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <div style={{ width: '100%', height: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${incPct}%`, height: '100%', background: '#22c55e', borderRadius: 3 }} />
+                    </div>
+                    <div style={{ width: '100%', height: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${expPct}%`, height: '100%', background: '#ef4444', borderRadius: 3 }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Operational & Workforce Snapshot */}
+        <div
+          className="card"
+          style={{
+            padding: 24,
+            borderRadius: 14,
+            border: '1px solid var(--border)',
+            background: 'var(--card-bg, #ffffff)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Workforce & Operations Snapshot</h3>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+                Active human capital and case intake metrics
+              </p>
+            </div>
+            <button type="button" className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => onNavigate('AGENTS')}>
+              Team Analytics →
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-muted, #f8fafc)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 12, color: 'var(--secondary)', fontWeight: 600 }}>Active Agents</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{p.activeAgents}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Handling intake calls</div>
+            </div>
+            <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-muted, #f8fafc)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 12, color: 'var(--secondary)', fontWeight: 600 }}>Team Leaders</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{p.activeTeamLeaders}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Supervising & reviewing</div>
+            </div>
+            <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-muted, #f8fafc)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 12, color: 'var(--secondary)', fontWeight: 600 }}>Avg Call Duration</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{fmtSeconds(cl.averageSeconds)}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Total: {fmtSeconds(cl.totalSeconds)}</div>
+            </div>
+            <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-muted, #f8fafc)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 12, color: 'var(--secondary)', fontWeight: 600 }}>Outsource Partners</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{p.activeOutsourceUsers}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Active verification</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// FinancialSummary KPI Cards
-export function FinancialSummary({
+// --- 3. Finance & Financial Reports Module ---
+export function FinanceModule({
   finance,
+  trends,
   financeType,
   expenseHead,
   totalHeadExpense,
+  headBreakdown,
+  filteredExpenses,
+  filteredIncomes,
+  viewMode,
+  onSelectHead,
 }: {
   finance: any;
+  trends: any;
   financeType: 'ALL' | 'INCOME' | 'EXPENSE' | 'NET_POSITION';
   expenseHead?: string;
   totalHeadExpense?: number;
-}) {
-  const showIncome = financeType === 'ALL' || financeType === 'INCOME';
-  const showExpenses = financeType === 'ALL' || financeType === 'EXPENSE';
-  const showNet = financeType === 'ALL' || financeType === 'NET_POSITION';
-
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 18 }}>
-      {/* Income Card */}
-      {showIncome && (
-        <div
-          className="card"
-          style={{
-            padding: '20px 24px',
-            borderRadius: 14,
-            border: '1px solid var(--border)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--muted, #64748b)', fontSize: 13, fontWeight: 600 }}>
-              <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(34, 197, 94, 0.15)', color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <CheckIcon size={12} color="#16a34a" />
-              </span>
-              Income
-            </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#16a34a', marginTop: 8 }}>
-              {finance.totalIncome} {finance.currency} <span style={{ fontSize: 18 }}>↓</span>
-            </div>
-          </div>
-          <svg width="70" height="35" viewBox="0 0 70 35" fill="none">
-            <path d="M2 30L20 22L38 25L52 10L68 6" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-      )}
-
-      {/* Expenses Card */}
-      {showExpenses && (
-        <div
-          className="card"
-          style={{
-            padding: '20px 24px',
-            borderRadius: 14,
-            border: '1px solid var(--border)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--muted, #64748b)', fontSize: 13, fontWeight: 600 }}>
-              <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <RefreshIcon size={12} color="#ef4444" />
-              </span>
-              Expenses
-              {expenseHead && (
-                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, background: '#461440', color: '#fff', fontWeight: 600 }}>
-                  {expenseHead}
-                </span>
-              )}
-            </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444', marginTop: 8 }}>
-              {expenseHead && totalHeadExpense !== undefined
-                ? `${totalHeadExpense.toLocaleString()} ${finance.currency}`
-                : `${finance.totalExpenses} ${finance.currency}`} <span style={{ fontSize: 18 }}>↑</span>
-            </div>
-          </div>
-          <svg width="70" height="35" viewBox="0 0 70 35" fill="none">
-            <path d="M2 18L18 26L34 14L50 22L68 6" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-      )}
-
-      {/* Net Position Card */}
-      {showNet && (
-        <div
-          className="card"
-          style={{
-            padding: '20px 24px',
-            borderRadius: 14,
-            border: '1px solid var(--border)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--muted, #64748b)', fontSize: 13, fontWeight: 600 }}>
-              <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(14, 165, 233, 0.15)', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <DocIcon size={12} color="#0284c7" />
-              </span>
-              Net position
-            </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#16a34a', marginTop: 8 }}>
-              {finance.netPosition} {finance.currency} <span style={{ fontSize: 18 }}>↑</span>
-            </div>
-          </div>
-          <svg width="70" height="35" viewBox="0 0 70 35" fill="none">
-            <path d="M2 28L22 20L40 22L54 12L68 4" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ExpenseBreakdown Component
-export function ExpenseBreakdown({
-  headBreakdown,
-  filteredExpenses,
-  selectedHead,
-  onSelectHead,
-}: {
   headBreakdown: HeadBreakdownItem[];
   filteredExpenses: TxRow[];
-  selectedHead?: string;
-  onSelectHead: (head: string) => void;
+  filteredIncomes: TxRow[];
+  viewMode: 'SUMMARY' | 'DETAILED';
+  onSelectHead: (h: string) => void;
 }) {
+  const isIncomeOnly = financeType === 'INCOME';
+  const isExpenseOnly = financeType === 'EXPENSE';
+  const isNetOnly = financeType === 'NET_POSITION';
+  const isAll = financeType === 'ALL';
+
+  const totalFilteredIncome = filteredIncomes
+    .filter((i) => i.status !== 'VOIDED')
+    .reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+
+  const totalFilteredExpense = filteredExpenses
+    .filter((e) => e.status !== 'VOIDED')
+    .reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+
   return (
-    <div className="card" style={{ padding: '20px 24px', borderRadius: 14, border: '1px solid var(--border)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(239, 68, 68, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}>
-            <CoinsIcon size={16} color="#ef4444" />
-          </span>
-          <div>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
-              Expense breakdown by head
-            </h3>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--muted, #94a3b8)' }}>
-              {selectedHead ? `Filtered for ${selectedHead}` : 'Expenditure metrics grouped by expense head'}
-            </p>
+    <div style={{ display: 'grid', gap: 24 }}>
+      {/* Financial KPIs (Filtered dynamically) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+        {/* Income Card - Shown when ALL or INCOME */}
+        {(isAll || isIncomeOnly) && (
+          <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Total Income / Revenue</span>
+              <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: 'rgba(34, 197, 94, 0.15)', color: '#16a34a' }}>
+                PKR
+              </span>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#16a34a', marginTop: 8 }}>
+              {isIncomeOnly
+                ? totalFilteredIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })
+                : finance?.totalIncome || '0'} PKR
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+              {filteredIncomes.length} recorded income entries
+            </div>
           </div>
-        </div>
-        {selectedHead && (
-          <button
-            type="button"
-            className="btn"
-            style={{ fontSize: 12, padding: '4px 10px', height: 28 }}
-            onClick={() => onSelectHead('')}
-          >
-            ✕ Clear head filter
-          </button>
+        )}
+
+        {/* Expenses Card - Shown when ALL or EXPENSE */}
+        {(isAll || isExpenseOnly) && (
+          <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Total Operating Expenses</span>
+              <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
+                PKR
+              </span>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#ef4444', marginTop: 8 }}>
+              {expenseHead && totalHeadExpense !== undefined
+                ? totalHeadExpense.toLocaleString('en-US', { minimumFractionDigits: 2 })
+                : isExpenseOnly
+                ? totalFilteredExpense.toLocaleString('en-US', { minimumFractionDigits: 2 })
+                : finance?.totalExpenses || '0'} PKR
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+              {filteredExpenses.length} verified expense entries
+            </div>
+          </div>
+        )}
+
+        {/* Net Position Card - Shown when ALL or NET_POSITION */}
+        {(isAll || isNetOnly) && (
+          <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--secondary)' }}>Net Position (Balance)</span>
+              <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: 'rgba(14, 165, 233, 0.15)', color: '#0284c7' }}>
+                PKR
+              </span>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--foreground)', marginTop: 8 }}>
+              {finance?.netPosition || '0'} PKR
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+              Income minus verified expenses
+            </div>
+          </div>
         )}
       </div>
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">EXPENSE HEAD</th>
-              <th scope="col">TRANSACTIONS</th>
-              <th scope="col">TOTAL AMOUNT</th>
-              <th scope="col">SHARE</th>
-              <th scope="col">ACTION</th>
-            </tr>
-          </thead>
-          <tbody>
-            {headBreakdown.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: 16 }}>
-                  No expense records found.
-                </td>
-              </tr>
-            ) : (
-              headBreakdown.map((hb) => {
-                const isSelected = selectedHead === hb.headName;
-                return (
-                  <tr key={hb.headName} style={{ background: isSelected ? 'rgba(70, 20, 64, 0.05)' : undefined }}>
-                    <td>
-                      <strong>{hb.headName}</strong>
-                      {isSelected && (
-                        <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 6px', borderRadius: 4, background: '#461440', color: '#fff', fontWeight: 600 }}>
-                          Active Filter
-                        </span>
-                      )}
-                    </td>
-                    <td>{hb.count}</td>
-                    <td style={{ color: '#ef4444', fontWeight: 700 }}>
-                      {hb.totalAmount.toLocaleString()} PKR
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 60, height: 6, borderRadius: 3, background: 'rgba(0,0,0,0.08)', overflow: 'hidden' }}>
-                          <div style={{ width: `${Math.min(100, hb.share)}%`, height: '100%', background: '#ef4444' }} />
-                        </div>
-                        <span style={{ fontSize: 12, fontWeight: 600 }}>{hb.share}%</span>
-                      </div>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{
-                          fontSize: 11,
-                          padding: '2px 8px',
-                          height: 24,
-                          background: isSelected ? 'var(--border)' : undefined,
-                        }}
-                        onClick={() => onSelectHead(isSelected ? '' : hb.headName)}
-                      >
-                        {isSelected ? 'Clear' : 'Filter by head'}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
+      {/* Expense Head Distribution (Strictly hidden when Income Only is active) */}
+      {!isIncomeOnly && headBreakdown.length > 0 && (
+        <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Expense Allocation by Category Head</h3>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+                Click any head category to isolate expenditures
+              </p>
+            </div>
+            {expenseHead && (
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => onSelectHead('')}>
+                Clear Head Selection
+              </button>
             )}
-          </tbody>
-        </table>
-      </div>
+          </div>
 
-      {filteredExpenses.length > 0 && (
-        <div style={{ marginTop: 22, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: 14, fontWeight: 700, color: 'var(--muted, #64748b)' }}>
-            Expense entries {selectedHead ? `(${selectedHead})` : ''}
-          </h4>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+            {headBreakdown.map((h) => {
+              const isSelected = expenseHead === h.headName;
+              return (
+                <div
+                  key={h.headName}
+                  onClick={() => onSelectHead(isSelected ? '' : h.headName)}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: 10,
+                    border: `1.5px solid ${isSelected ? '#461440' : 'var(--border)'}`,
+                    background: isSelected ? 'rgba(70, 20, 64, 0.08)' : 'var(--surface-muted, #f8fafc)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600 }}>
+                    <span style={{ color: isSelected ? '#461440' : 'var(--foreground)' }}>{h.headName}</span>
+                    <span style={{ color: 'var(--secondary)', fontSize: 12 }}>{h.share}%</span>
+                  </div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#ef4444', marginTop: 6 }}>
+                    {h.totalAmount.toLocaleString()} PKR
+                  </div>
+                  <div style={{ width: '100%', height: 4, background: 'rgba(0,0,0,0.06)', borderRadius: 2, marginTop: 8, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min(100, h.share)}%`, height: '100%', background: '#ef4444', borderRadius: 2 }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Income Records Table (Strictly shown when ALL or INCOME) */}
+      {(isAll || isIncomeOnly) && (
+        <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Income Transaction Ledger</h3>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+                {filteredIncomes.length} records matching current date filters
+              </p>
+            </div>
+            <Link to="/finance/income" className="btn btn-ghost" style={{ fontSize: 12, textDecoration: 'none' }}>
+              Full Income Module →
+            </Link>
+          </div>
+
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th scope="col">DATE</th>
-                  <th scope="col">EXPENSE HEAD</th>
-                  <th scope="col">REMARKS / DETAILS</th>
-                  <th scope="col">REFERENCE</th>
-                  <th scope="col">AMOUNT</th>
-                  <th scope="col">STATUS</th>
+                  <th scope="col">Income Head</th>
+                  <th scope="col">Duration / Date</th>
+                  <th scope="col">Remarks</th>
+                  <th scope="col">Amount (PKR)</th>
+                  <th scope="col">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredExpenses.slice(0, 20).map((exp) => (
-                  <tr key={exp.id}>
-                    <td>{exp.date}</td>
-                    <td><strong>{exp.category}</strong></td>
-                    <td>{exp.description || '—'}</td>
-                    <td>{exp.reference || '—'}</td>
-                    <td style={{ color: '#ef4444', fontWeight: 700 }}>
-                      {exp.amount} {exp.currency}
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          padding: '2px 8px',
-                          borderRadius: 12,
-                          background: exp.status === 'ACTIVE' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                          color: exp.status === 'ACTIVE' ? '#16a34a' : '#ef4444',
-                          fontWeight: 600,
-                        }}
-                      >
-                        {exp.status}
-                      </span>
+                {filteredIncomes.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                      No income records match these filters.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredIncomes.slice(0, 15).map((row) => (
+                    <tr key={row.id}>
+                      <td><strong>{row.category}</strong></td>
+                      <td>{row.fromDate && row.toDate ? `${row.fromDate} – ${row.toDate}` : row.date}</td>
+                      <td>{row.description || '—'}</td>
+                      <td style={{ fontWeight: 700, color: '#16a34a' }}>{row.amount} PKR</td>
+                      <td>
+                        <span className={row.status === 'ACTIVE' ? 'badge b-ACTIVE' : 'badge'}>
+                          {row.status === 'ACTIVE' ? 'Active' : 'Voided'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Expense Records Table (Strictly shown when ALL or EXPENSE) */}
+      {(isAll || isExpenseOnly) && (
+        <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Expense Transaction Ledger</h3>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+                {filteredExpenses.length} records matching current filters
+              </p>
+            </div>
+            <Link to="/finance/expenses" className="btn btn-ghost" style={{ fontSize: 12, textDecoration: 'none' }}>
+              Full Expense Module →
+            </Link>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Expense Head</th>
+                  <th scope="col">Date</th>
+                  <th scope="col">Payee / Remarks</th>
+                  <th scope="col">Amount (PKR)</th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredExpenses.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                      No expense records match these filters.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredExpenses.slice(0, 15).map((row) => (
+                    <tr key={row.id}>
+                      <td><strong>{row.category}</strong></td>
+                      <td>{row.date}</td>
+                      <td>{row.description || row.party || '—'}</td>
+                      <td style={{ fontWeight: 700, color: '#ef4444' }}>{row.amount} {row.currency}</td>
+                      <td>
+                        <span className={row.status === 'ACTIVE' ? 'badge b-ACTIVE' : 'badge'}>
+                          {row.status === 'ACTIVE' ? 'Active' : 'Voided'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -422,446 +650,262 @@ export function ExpenseBreakdown({
   );
 }
 
-// FinanceModule Component
-export function FinanceModule({
-  finance,
-  trends,
-  financeType,
-  expenseHead,
-  totalHeadExpense,
-  headBreakdown,
-  filteredExpenses,
-  onSelectHead,
-}: {
-  finance: any;
-  trends: any;
-  financeType: 'ALL' | 'INCOME' | 'EXPENSE' | 'NET_POSITION';
-  expenseHead?: string;
-  totalHeadExpense?: number;
-  headBreakdown: HeadBreakdownItem[];
-  filteredExpenses: TxRow[];
-  onSelectHead: (head: string) => void;
-}) {
-  const showExpensesBreakdown = financeType === 'ALL' || financeType === 'EXPENSE';
-  const showMonthlyTable = financeType === 'ALL' || financeType === 'INCOME' || financeType === 'NET_POSITION';
-
-  return (
-    <section>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <span
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 8,
-            background: 'rgba(245, 158, 11, 0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#d97706',
-          }}
-        >
-          <CoinsIcon size={18} color="#d97706" />
-        </span>
-        <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700 }}>Finance</h2>
-      </div>
-
-      {finance ? (
-        <>
-          <FinancialSummary
-            finance={finance}
-            financeType={financeType}
-            expenseHead={expenseHead}
-            totalHeadExpense={totalHeadExpense}
-          />
-
-          {showMonthlyTable && (
-            <div className="card" style={{ padding: '18px 22px', borderRadius: 14, border: '1px solid var(--border)', marginBottom: 18 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                <span style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d97706' }}>
-                  <ChartIcon size={16} color="#d97706" />
-                </span>
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
-                  Income vs expenses by month
-                </h3>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">MONTH</th>
-                      <th scope="col">INCOME</th>
-                      <th scope="col">EXPENSES</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trends.incomeVsExpenseByMonth.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: 16 }}>
-                          No financial records in this period.
-                        </td>
-                      </tr>
-                    ) : (
-                      trends.incomeVsExpenseByMonth.map((r: any) => (
-                        <tr key={r.month}>
-                          <td><strong>{r.month}</strong></td>
-                          <td style={{ color: '#16a34a', fontWeight: 600 }}>{r.income}</td>
-                          <td style={{ color: '#ef4444', fontWeight: 600 }}>{r.expenses}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {showExpensesBreakdown && (
-            <ExpenseBreakdown
-              headBreakdown={headBreakdown}
-              filteredExpenses={filteredExpenses}
-              selectedHead={expenseHead}
-              onSelectHead={onSelectHead}
-            />
-          )}
-        </>
-      ) : (
-        <p className="card" role="note">Finance figures are not available for your account.</p>
-      )}
-    </section>
-  );
-}
-
-// CaseStatusBreakdown Component
-export function CaseStatusBreakdown({ operations }: { operations: any }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 18 }}>
-      <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Total cases</div>
-        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{operations.totalRecords}</div>
-      </div>
-      <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid rgba(245, 158, 11, 0.3)', background: 'rgba(245, 158, 11, 0.04)' }}>
-        <div style={{ fontSize: 13, color: '#d97706', fontWeight: 600 }}>Pending</div>
-        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#d97706' }}>{operations.pending}</div>
-      </div>
-      <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid rgba(34, 197, 94, 0.3)', background: 'rgba(34, 197, 94, 0.04)' }}>
-        <div style={{ fontSize: 13, color: '#16a34a', fontWeight: 600 }}>Accepted</div>
-        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#16a34a' }}>{operations.accepted}</div>
-      </div>
-      <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid rgba(239, 68, 68, 0.3)', background: 'rgba(239, 68, 68, 0.04)' }}>
-        <div style={{ fontSize: 13, color: '#ef4444', fontWeight: 600 }}>Rejected</div>
-        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#ef4444' }}>{operations.rejected}</div>
-      </div>
-      <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Acceptance rate</div>
-        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#16a34a' }}>{operations.acceptanceRate}%</div>
-      </div>
-      <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Rejection rate</div>
-        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#ef4444' }}>{operations.rejectionRate}%</div>
-      </div>
-    </div>
-  );
-}
-
-// DailyCaseBreakdown Component
-export function DailyCaseBreakdown({ recordsByDate }: { recordsByDate: any[] }) {
-  return (
-    <div className="card" style={{ padding: '18px 22px', borderRadius: 14, border: '1px solid var(--border)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <span style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d97706' }}>
-          <CalendarIcon size={16} color="#d97706" />
-        </span>
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Daily case breakdown</h3>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">DATE</th>
-              <th scope="col">TOTAL</th>
-              <th scope="col">ACCEPTED</th>
-              <th scope="col">REJECTED</th>
-              <th scope="col">PENDING</th>
-            </tr>
-          </thead>
-          <tbody>
-            {recordsByDate.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: 16 }}>
-                  No cases recorded in this date range.
-                </td>
-              </tr>
-            ) : (
-              recordsByDate.map((r: any) => (
-                <tr key={r.date}>
-                  <td><strong>{r.date}</strong></td>
-                  <td>{r.total}</td>
-                  <td style={{ color: '#16a34a', fontWeight: 600 }}>{r.accepted}</td>
-                  <td style={{ color: '#ef4444', fontWeight: 600 }}>{r.rejected}</td>
-                  <td style={{ color: '#ea580c', fontWeight: 600 }}>{r.pending}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// AgentPerformance Component
-export function AgentPerformance({ cases }: { cases: CaseDto[] }) {
-  const agentMap = useMemo(() => {
-    const map: Record<string, { name: string; total: number; accepted: number; rejected: number; pending: number; callSeconds: number }> = {};
-    for (const c of cases) {
-      const name = c.agent?.fullName || 'Intake Agent';
-      if (!map[name]) {
-        map[name] = { name, total: 0, accepted: 0, rejected: 0, pending: 0, callSeconds: 0 };
-      }
-      map[name].total += 1;
-      if (c.status === 'ACCEPTED') map[name].accepted += 1;
-      else if (c.status === 'REJECTED') map[name].rejected += 1;
-      else map[name].pending += 1;
-      map[name].callSeconds += c.callLengthSeconds || 0;
-    }
-    return Object.values(map).sort((a, b) => b.total - a.total);
-  }, [cases]);
-
-  return (
-    <div className="card" style={{ padding: '18px 22px', borderRadius: 14, border: '1px solid var(--border)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <span style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d97706' }}>
-          <UsersIcon size={16} color="#d97706" />
-        </span>
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Agent performance</h3>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">AGENT</th>
-              <th scope="col">TOTAL</th>
-              <th scope="col">ACCEPTED</th>
-              <th scope="col">REJECTED</th>
-              <th scope="col">PENDING</th>
-              <th scope="col">AVG CALL</th>
-            </tr>
-          </thead>
-          <tbody>
-            {agentMap.length === 0 ? (
-              <tr>
-                <td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted, #94a3b8)', padding: 16 }}>
-                  No agent performance data found.
-                </td>
-              </tr>
-            ) : (
-              agentMap.map((a) => (
-                <tr key={a.name}>
-                  <td><strong>{a.name}</strong></td>
-                  <td>{a.total}</td>
-                  <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.accepted}</td>
-                  <td style={{ color: '#ef4444', fontWeight: 600 }}>{a.rejected}</td>
-                  <td style={{ color: '#ea580c', fontWeight: 600 }}>{a.pending}</td>
-                  <td>{a.total > 0 ? fmtSeconds(Math.round(a.callSeconds / a.total)) : '00:00:00'}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// OperationsModule Component
+// --- 4. Operations & Cases Reports Module ---
 export function OperationsModule({
   operations,
-  people,
-  callLength,
   trends,
-  cases = [],
-  activeTab = 'OVERVIEW',
-  onTabChange,
+  cases,
+  statusFilter,
+  agentFilter,
 }: {
   operations: any;
-  people: any;
-  callLength: any;
   trends: any;
-  cases?: CaseDto[];
-  activeTab?: string;
-  onTabChange: (tabId: string) => void;
+  cases: CaseDto[];
+  statusFilter: string;
+  agentFilter: string;
 }) {
-  const tabs = [
-    { id: 'OVERVIEW', label: 'Overview / Summary', icon: <DocIcon size={14} /> },
-    { id: 'AGENT_PERFORMANCE', label: 'Agent Performance', icon: <UsersIcon size={14} /> },
-    { id: 'CASE_STATUS', label: 'Case Status Breakdown', icon: <CheckIcon size={14} /> },
-    { id: 'DAILY_BREAKDOWN', label: 'Daily / Date Breakdown', icon: <CalendarIcon size={14} /> },
-  ];
+  const total = cases.length;
+  const pending = cases.filter((c) => c.status === 'PENDING').length;
+  const accepted = cases.filter((c) => c.status === 'ACCEPTED').length;
+  const rejected = cases.filter((c) => c.status === 'REJECTED').length;
+  const processed = accepted + rejected;
+
+  const acceptanceRate = processed > 0 ? Math.round((accepted / processed) * 100) : 0;
+  const rejectionRate = processed > 0 ? Math.round((rejected / processed) * 100) : 0;
 
   return (
-    <section>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              background: 'rgba(245, 158, 11, 0.15)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#d97706',
-            }}
-          >
-            <GearIcon size={18} color="#d97706" />
-          </span>
-          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700 }}>Operations</h2>
+    <div style={{ display: 'grid', gap: 24 }}>
+      {/* Dynamic Case Pipeline KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--secondary)' }}>Total Filtered Cases</div>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4 }}>{total}</div>
         </div>
-        <Link
-          to="/reports"
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: 'var(--primary)',
-            textDecoration: 'none',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          View full cases report by user & date →
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#d97706' }}>Pending Cases</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#d97706', marginTop: 4 }}>{pending}</div>
+        </div>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>Accepted Cases</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#16a34a', marginTop: 4 }}>{accepted}</div>
+        </div>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#ef4444' }}>Rejected Cases</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444', marginTop: 4 }}>{rejected}</div>
+        </div>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#0284c7' }}>Acceptance Rate</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#0284c7', marginTop: 4 }}>{acceptanceRate}%</div>
+        </div>
+      </div>
+
+      {/* Case Pipeline Table */}
+      <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Case Processing Records</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+              Showing {cases.length} records matching current filter criteria
+            </p>
+          </div>
+          <Link to="/reports" className="btn btn-ghost" style={{ fontSize: 12, textDecoration: 'none' }}>
+            Open Advanced Reports →
+          </Link>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Case ID</th>
+                <th scope="col">Customer Name</th>
+                <th scope="col">Phone</th>
+                <th scope="col">State / ZIP</th>
+                <th scope="col">Assigned Agent</th>
+                <th scope="col">Status</th>
+                <th scope="col">Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cases.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                    No case records match these filters.
+                  </td>
+                </tr>
+              ) : (
+                cases.slice(0, 20).map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      <Link to={`/cases/${c.id}`} style={{ fontWeight: 600, textDecoration: 'none', color: 'var(--primary)' }}>
+                        {c.id.substring(0, 8)}…
+                      </Link>
+                    </td>
+                    <td>{c.customer ? `${c.customer.firstName} ${c.customer.lastName}` : '—'}</td>
+                    <td>{c.customer?.phone || '—'}</td>
+                    <td>{c.customer?.address || c.customer?.zipCode ? `${c.customer.address || ''} ${c.customer.zipCode || ''}` : '—'}</td>
+                    <td>{c.agent?.fullName || 'Unassigned'}</td>
+                    <td>
+                      <span className={`badge b-${c.status}`}>{c.status}</span>
+                    </td>
+                    <td>{c.submittedAt ? c.submittedAt.substring(0, 10) : '—'}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- 5. Agent & Team Performance Module ---
+export function AgentPerformanceModule({
+  cases,
+  callLength,
+}: {
+  cases: CaseDto[];
+  callLength: any;
+}) {
+  // Aggregate performance by agent
+  const agentMap = new Map<string, { agentName: string; total: number; accepted: number; rejected: number; pending: number }>();
+
+  for (const c of cases) {
+    const aName = c.agent?.fullName || 'Unassigned';
+    const curr = agentMap.get(aName) || { agentName: aName, total: 0, accepted: 0, rejected: 0, pending: 0 };
+    curr.total += 1;
+    if (c.status === 'ACCEPTED') curr.accepted += 1;
+    else if (c.status === 'REJECTED') curr.rejected += 1;
+    else curr.pending += 1;
+    agentMap.set(aName, curr);
+  }
+
+  const agents = Array.from(agentMap.values()).sort((a, b) => b.total - a.total);
+
+  return (
+    <div style={{ display: 'grid', gap: 24 }}>
+      {/* Call Duration Analytics KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--secondary)' }}>Average Call Duration</div>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4 }}>{fmtSeconds(callLength.averageSeconds)}</div>
+        </div>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--secondary)' }}>Total Talk Time</div>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4 }}>{fmtSeconds(callLength.totalSeconds)}</div>
+        </div>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--secondary)' }}>Shortest Call</div>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4 }}>{fmtSeconds(callLength.minSeconds)}</div>
+        </div>
+        <div className="card" style={{ padding: 18, borderRadius: 12, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--secondary)' }}>Longest Call</div>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4 }}>{fmtSeconds(callLength.maxSeconds)}</div>
+        </div>
+      </div>
+
+      {/* Agent Performance Table */}
+      <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+        <h3 style={{ margin: '0 0 14px', fontSize: 15, fontWeight: 700 }}>Agent Productivity & Acceptance Metrics</h3>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Agent Name</th>
+                <th scope="col">Total Cases</th>
+                <th scope="col">Accepted</th>
+                <th scope="col">Rejected</th>
+                <th scope="col">Pending</th>
+                <th scope="col">Acceptance Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                    No agent performance records available.
+                  </td>
+                </tr>
+              ) : (
+                agents.map((a) => {
+                  const processed = a.accepted + a.rejected;
+                  const rate = processed > 0 ? Math.round((a.accepted / processed) * 100) : 0;
+                  return (
+                    <tr key={a.agentName}>
+                      <td><strong>{a.agentName}</strong></td>
+                      <td style={{ fontWeight: 600 }}>{a.total}</td>
+                      <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.accepted}</td>
+                      <td style={{ color: '#ef4444', fontWeight: 600 }}>{a.rejected}</td>
+                      <td style={{ color: '#d97706' }}>{a.pending}</td>
+                      <td>
+                        <span style={{ fontWeight: 700, color: rate >= 70 ? '#16a34a' : 'var(--foreground)' }}>
+                          {rate}%
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- 6. Audit & Compliance Module ---
+export function AuditComplianceModule({
+  logs,
+}: {
+  logs: any[];
+}) {
+  return (
+    <div className="card" style={{ padding: 22, borderRadius: 14, border: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Security & Compliance Audit Trail</h3>
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--secondary)' }}>
+            Real-time chronological log of system transactions and administrative modifications
+          </p>
+        </div>
+        <Link to="/admin/audit" className="btn btn-ghost" style={{ fontSize: 12, textDecoration: 'none' }}>
+          Open Full Audit Page →
         </Link>
       </div>
 
-      <ModuleTabs tabs={tabs} activeTab={activeTab} onTabChange={onTabChange} />
-
-      {activeTab === 'OVERVIEW' && (
-        <>
-          {/* Operations KPI Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 18 }}>
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(99, 102, 241, 0.15)', color: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <DocIcon size={13} color="#6366f1" />
-                </span>
-                Total records
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{operations.totalRecords}</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(245, 158, 11, 0.15)', color: '#d97706', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <UsersIcon size={13} color="#d97706" />
-                </span>
-                New records
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{operations.newRecords}</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(234, 88, 12, 0.15)', color: '#ea580c', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <ClockIcon size={13} color="#ea580c" />
-                </span>
-                Pending
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{operations.pending}</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(34, 197, 94, 0.15)', color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <CheckIcon size={13} color="#16a34a" />
-                </span>
-                Accepted
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#16a34a' }}>{operations.accepted}</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <CrossIcon size={13} color="#ef4444" />
-                </span>
-                Rejected
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#ef4444' }}>{operations.rejected}</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(20, 184, 166, 0.15)', color: '#0d9488', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <RefreshIcon size={13} color="#0d9488" />
-                </span>
-                Processed
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{operations.processingRate}%</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(34, 197, 94, 0.15)', color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <CheckIcon size={13} color="#16a34a" />
-                </span>
-                Acceptance
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#16a34a' }}>{operations.acceptanceRate}%</div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>
-                <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <CrossIcon size={13} color="#ef4444" />
-                </span>
-                Rejection
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: '#ef4444' }}>{operations.rejectionRate}%</div>
-            </div>
-          </div>
-
-          <DailyCaseBreakdown recordsByDate={trends.recordsByDate} />
-
-          {/* People & Calls */}
-          <div style={{ marginTop: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <span style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d97706' }}>
-                <UsersIcon size={16} color="#d97706" />
-              </span>
-              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>People and calls</h3>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
-              <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Active agents</div>
-                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{people.activeAgents}</div>
-              </div>
-              <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Active team leaders</div>
-                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{people.activeTeamLeaders}</div>
-              </div>
-              <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Active outsource users</div>
-                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{people.activeOutsourceUsers}</div>
-              </div>
-              <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Average call</div>
-                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{fmtSeconds(callLength.averageSeconds)}</div>
-              </div>
-              <div className="card" style={{ padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 13, color: 'var(--muted, #64748b)', fontWeight: 600 }}>Total call time</div>
-                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{fmtSeconds(callLength.totalSeconds)}</div>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {activeTab === 'AGENT_PERFORMANCE' && <AgentPerformance cases={cases} />}
-
-      {activeTab === 'CASE_STATUS' && <CaseStatusBreakdown operations={operations} />}
-
-      {activeTab === 'DAILY_BREAKDOWN' && <DailyCaseBreakdown recordsByDate={trends.recordsByDate} />}
-    </section>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Timestamp</th>
+              <th scope="col">Event</th>
+              <th scope="col">Actor</th>
+              <th scope="col">Entity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.length === 0 ? (
+              <tr>
+                <td colSpan={4} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                  No audit log entries recorded for this timeframe.
+                </td>
+              </tr>
+            ) : (
+              logs.slice(0, 20).map((l: any) => (
+                <tr key={l.id}>
+                  <td>{fmtDateTime(l.at)}</td>
+                  <td><span className="badge">{l.event}</span></td>
+                  <td>{l.actor?.fullName || 'System Staff'}</td>
+                  <td><code>{l.entityType}:{l.entityId?.substring(0, 8)}</code></td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

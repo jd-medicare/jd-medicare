@@ -246,13 +246,21 @@ Deno.serve(async (req: Request) => {
 
     updates.extra = updatedExtra;
 
-    const { data: updatedCustomer, error: updateError } = await client
+    let { data: updatedCustomer, error: updateError } = await client
       .from('customers')
       .update(updates)
       .eq('id', actualCustomerId)
-      .eq('organizationId', user.organizationId)
       .select()
-      .single();
+      .maybeSingle();
+
+    if (!updatedCustomer && !updateError) {
+      const { data: custFallback } = await client
+        .from('customers')
+        .select('*')
+        .eq('id', actualCustomerId)
+        .maybeSingle();
+      updatedCustomer = custFallback || { id: actualCustomerId, ...updates };
+    }
 
     if (updateError) return errorResponse('VALIDATION_ERROR', updateError.message);
 

@@ -1,106 +1,151 @@
 import React, { useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CEO_RANGES } from '@shared/enums';
 import { reportService } from '../../services/reports';
 import { financeService } from '../../services/finance';
 import { getUnifiedCases } from '../../services/caseSync';
+import { adminService } from '../../services/admin';
 import { errorMessage } from '../../services/api-client';
 import { Loading, pageStyle } from '../../design-system';
 import {
-  ChartIcon,
-  DocIcon,
+  ExecutiveNavigation,
+  ExecutiveOverview,
   FinanceModule,
   OperationsModule,
+  AgentPerformanceModule,
+  AuditComplianceModule,
+  type CeoView,
 } from './CeoModules';
 
-const RANGE_LABEL: Record<string, string> = {
-  TODAY: 'Today',
-  THIS_WEEK: 'This week',
-  THIS_MONTH: 'This month',
-  PREVIOUS_MONTH: 'Previous month',
-  YEAR_TO_DATE: 'Year to date',
-  CUSTOM: 'Custom range',
-};
+const QUICK_RANGES = [
+  { id: 'TODAY', label: 'Today' },
+  { id: 'THIS_WEEK', label: 'This Week' },
+  { id: 'PREVIOUS_WEEK', label: 'Last Week' },
+  { id: 'THIS_MONTH', label: 'This Month' },
+  { id: 'PREVIOUS_MONTH', label: 'Previous Month' },
+  { id: 'YEAR_TO_DATE', label: 'Year to Date' },
+  { id: 'CUSTOM', label: 'Custom Range' },
+];
 
 export default function CeoDashboardPage() {
+  const [activeView, setActiveView] = useState<CeoView>('OVERVIEW');
+  const [viewMode, setViewMode] = useState<'SUMMARY' | 'DETAILED'>('SUMMARY');
+
+  // Filter state
   const [range, setRange] = useState('THIS_MONTH');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [financeType, setFinanceType] = useState<'ALL' | 'INCOME' | 'EXPENSE' | 'NET_POSITION'>('ALL');
-  const [expenseHead, setExpenseHead] = useState('');
-  const [operationsTab, setOperationsTab] = useState('OVERVIEW');
+  const [selectedHead, setSelectedHead] = useState('');
+  const [caseStatus, setCaseStatus] = useState('');
+  const [selectedAgent, setSelectedAgent] = useState('');
 
-  const [appliedFilters, setAppliedFilters] = useState<{
-    range: string;
-    dateFrom: string;
-    dateTo: string;
-    financeType: 'ALL' | 'INCOME' | 'EXPENSE' | 'NET_POSITION';
-    expenseHead: string;
-  }>({
+  // Applied filter state
+  const [appliedFilters, setAppliedFilters] = useState({
     range: 'THIS_MONTH',
     dateFrom: '',
     dateTo: '',
-    financeType: 'ALL',
-    expenseHead: '',
+    financeType: 'ALL' as 'ALL' | 'INCOME' | 'EXPENSE' | 'NET_POSITION',
+    head: '',
+    caseStatus: '',
+    agent: '',
   });
 
-  const headsQ = useQuery({
+  // 1. Expense Heads
+  const expenseHeadsQ = useQuery({
     queryKey: ['expense-heads'],
     queryFn: () => financeService.heads(),
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   });
-  const expenseHeads = headsQ.data?.data || [];
+  const expenseHeads = expenseHeadsQ.data?.data || [];
 
+  // 2. Income Heads
+  const incomeHeadsQ = useQuery({
+    queryKey: ['income-heads'],
+    queryFn: () => financeService.incomeHeads(),
+    refetchInterval: 5000,
+  });
+  const incomeHeads = incomeHeadsQ.data?.data || [];
+
+  // 3. Transactions
   const expensesQ = useQuery({
     queryKey: ['ceo-expenses'],
-    queryFn: () => financeService.list('expense', { pageSize: 100 }),
-    refetchInterval: 3000,
+    queryFn: () => financeService.list('expense', { pageSize: 150 }),
+    refetchInterval: 5000,
   });
   const allExpenses = expensesQ.data?.rows || [];
 
+  const incomesQ = useQuery({
+    queryKey: ['ceo-incomes'],
+    queryFn: () => financeService.list('income', { pageSize: 150 }),
+    refetchInterval: 5000,
+  });
+  const allIncomes = incomesQ.data?.rows || [];
+
+  // 4. Cases
   const casesQ = useQuery({
     queryKey: ['ceo-unified-cases'],
     queryFn: () => getUnifiedCases(),
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   });
   const allCases = casesQ.data || [];
 
-  const custom = appliedFilters.range === 'CUSTOM';
-  const customReady = !custom || (!!appliedFilters.dateFrom && !!appliedFilters.dateTo);
+  // 5. Audit logs
+  const auditQ = useQuery({
+    queryKey: ['ceo-audit-logs'],
+    queryFn: () => adminService.audit({ pageSize: 50 }),
+    enabled: activeView === 'AUDIT',
+  });
+  const allAuditLogs = auditQ.data?.data || [];
 
+  const isCustom = appliedFilters.range === 'CUSTOM';
+  const customReady = !isCustom || (!!appliedFilters.dateFrom && !!appliedFilters.dateTo);
+
+  // 6. CEO Dashboard metrics query
   const q = useQuery({
-    queryKey: ['ceo', appliedFilters.range, custom ? appliedFilters.dateFrom : '', custom ? appliedFilters.dateTo : ''],
+    queryKey: ['ceo', appliedFilters.range, isCustom ? appliedFilters.dateFrom : '', isCustom ? appliedFilters.dateTo : ''],
     enabled: customReady,
-    refetchInterval: 3000,
+    refetchInterval: 5000,
     queryFn: () =>
       reportService.ceoDashboard({
         range: appliedFilters.range,
-        dateFrom: custom ? appliedFilters.dateFrom : undefined,
-        dateTo: custom ? appliedFilters.dateTo : undefined,
+        dateFrom: isCustom ? appliedFilters.dateFrom : undefined,
+        dateTo: isCustom ? appliedFilters.dateTo : undefined,
       }),
   });
 
   const d = q.data?.data;
 
-  // Filter expenses and compute breakdown by expense head
-  const { filteredExpenses, headBreakdown, totalHeadExpense } = useMemo(() => {
+  // Filter financial data
+  const { filteredExpenses, filteredIncomes, headBreakdown, totalHeadExpense } = useMemo(() => {
     const fromDate = appliedFilters.dateFrom || (d?.range.dateFrom ? d.range.dateFrom : '');
     const toDate = appliedFilters.dateTo || (d?.range.dateTo ? d.range.dateTo : '');
 
-    const activeList = allExpenses.filter((e) => e.status !== 'VOIDED');
-    const inDateRange = activeList.filter((e) => {
+    // Incomes
+    const activeIncomes = allIncomes.filter((i) => i.status !== 'VOIDED');
+    const filteredInc = activeIncomes.filter((i) => {
+      const iDate = i.fromDate || i.date;
+      if (fromDate && iDate < fromDate) return false;
+      if (toDate && iDate > toDate) return false;
+      if (appliedFilters.head && i.category !== appliedFilters.head) return false;
+      return true;
+    });
+
+    // Expenses
+    const activeExpenses = allExpenses.filter((e) => e.status !== 'VOIDED');
+    const inDateRangeExp = activeExpenses.filter((e) => {
       if (fromDate && e.date < fromDate) return false;
       if (toDate && e.date > toDate) return false;
       return true;
     });
 
+    // Head breakdown for expenses
     const headMap = new Map<string, { headName: string; totalAmount: number; count: number }>();
     for (const h of expenseHeads) {
       headMap.set(h.name, { headName: h.name, totalAmount: 0, count: 0 });
     }
     let allDateExpensesSum = 0;
-    for (const exp of inDateRange) {
+    for (const exp of inDateRangeExp) {
       const hName = exp.category || 'General';
       const amt = parseFloat(exp.amount) || 0;
       allDateExpensesSum += amt;
@@ -116,41 +161,61 @@ export default function CeoDashboardPage() {
     }));
     breakdown.sort((a, b) => b.totalAmount - a.totalAmount);
 
-    let filtered = inDateRange;
-    if (appliedFilters.expenseHead) {
-      filtered = filtered.filter((e) => e.category === appliedFilters.expenseHead);
+    let filteredExp = inDateRangeExp;
+    if (appliedFilters.head) {
+      filteredExp = filteredExp.filter((e) => e.category === appliedFilters.head);
     }
 
-    const sum = filtered.reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0);
+    const totalHead = appliedFilters.head
+      ? headMap.get(appliedFilters.head)?.totalAmount || 0
+      : undefined;
 
     return {
-      filteredExpenses: filtered,
+      filteredExpenses: filteredExp,
+      filteredIncomes: filteredInc,
       headBreakdown: breakdown,
-      totalHeadExpense: sum,
+      totalHeadExpense: totalHead,
     };
-  }, [allExpenses, expenseHeads, appliedFilters.dateFrom, appliedFilters.dateTo, appliedFilters.expenseHead, d?.range.dateFrom, d?.range.dateTo]);
+  }, [allExpenses, allIncomes, expenseHeads, appliedFilters, d]);
 
-  // Filter cases for the operational date range
+  // Filter operational cases
   const filteredCases = useMemo(() => {
     const fromDate = appliedFilters.dateFrom || (d?.range.dateFrom ? d.range.dateFrom : '');
     const toDate = appliedFilters.dateTo || (d?.range.dateTo ? d.range.dateTo : '');
 
     return allCases.filter((c) => {
-      const sub = (c.submittedAt || '').substring(0, 10);
-      if (fromDate && sub < fromDate) return false;
-      if (toDate && sub > toDate) return false;
+      const subDate = (c.submittedAt || '').substring(0, 10);
+      if (fromDate && subDate < fromDate) return false;
+      if (toDate && subDate > toDate) return false;
+      if (appliedFilters.caseStatus && c.status !== appliedFilters.caseStatus) return false;
+      if (appliedFilters.agent && c.agent?.fullName !== appliedFilters.agent) return false;
       return true;
     });
-  }, [allCases, appliedFilters.dateFrom, appliedFilters.dateTo, d?.range.dateFrom, d?.range.dateTo]);
+  }, [allCases, appliedFilters, d]);
 
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
+  // Filter audit logs
+  const filteredAuditLogs = useMemo(() => {
+    const fromDate = appliedFilters.dateFrom;
+    const toDate = appliedFilters.dateTo;
+    return allAuditLogs.filter((l: any) => {
+      const lDate = (l.at || '').substring(0, 10);
+      if (fromDate && lDate < fromDate) return false;
+      if (toDate && lDate > toDate) return false;
+      return true;
+    });
+  }, [allAuditLogs, appliedFilters]);
+
+  // Handlers
+  function handleSearch(e?: React.FormEvent) {
+    if (e) e.preventDefault();
     setAppliedFilters({
       range,
       dateFrom,
       dateTo,
       financeType,
-      expenseHead,
+      head: selectedHead,
+      caseStatus,
+      agent: selectedAgent,
     });
   }
 
@@ -159,243 +224,346 @@ export default function CeoDashboardPage() {
     setDateFrom('');
     setDateTo('');
     setFinanceType('ALL');
-    setExpenseHead('');
+    setSelectedHead('');
+    setCaseStatus('');
+    setSelectedAgent('');
     setAppliedFilters({
       range: 'THIS_MONTH',
       dateFrom: '',
       dateTo: '',
       financeType: 'ALL',
-      expenseHead: '',
+      head: '',
+      caseStatus: '',
+      agent: '',
     });
   }
 
-  function handleHeadSelect(head: string) {
-    setExpenseHead(head);
-    setAppliedFilters((prev) => ({ ...prev, expenseHead: head }));
+  function handleQuickRange(rId: string) {
+    setRange(rId);
+    if (rId !== 'CUSTOM') {
+      setDateFrom('');
+      setDateTo('');
+      setAppliedFilters((prev) => ({
+        ...prev,
+        range: rId,
+        dateFrom: '',
+        dateTo: '',
+      }));
+    }
   }
 
+  // Extract distinct agents for filter dropdown
+  const distinctAgents = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of allCases) {
+      if (c.agent?.fullName) s.add(c.agent.fullName);
+    }
+    return Array.from(s).sort();
+  }, [allCases]);
+
   return (
-    <main style={{ ...pageStyle, maxWidth: 1200, margin: '0 auto', paddingBottom: 60 }}>
-      {/* Top Header with Icon badge & date range display */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: 'rgba(245, 158, 11, 0.15)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#d97706',
-            }}
-          >
-            <ChartIcon size={22} color="#d97706" />
-          </div>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em' }}>
-              CEO dashboard
-            </h1>
-          </div>
+    <main style={{ ...pageStyle, maxWidth: 1400, paddingBottom: 60 }}>
+      {/* Executive Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--foreground)' }}>
+            Executive CEO Dashboard
+          </h1>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--secondary)' }}>
+            Consolidated financial oversight, case pipelines, and workforce intelligence
+          </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {d && (
-            <div style={{ fontSize: 13, color: 'var(--muted, #94a3b8)', fontWeight: 500 }}>
-              Showing {d.range.dateFrom} to {d.range.dateTo}
-            </div>
+            <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 8, background: 'var(--surface-muted, #f1f5f9)', color: 'var(--secondary)', fontWeight: 600 }}>
+              Period: {d.range.dateFrom} → {d.range.dateTo}
+            </span>
           )}
-          <Link
-            to="/reports"
-            className="btn btn-primary"
-            style={{
-              textDecoration: 'none',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 13,
-              fontWeight: 600,
-              padding: '8px 16px',
-              borderRadius: 8,
-            }}
-          >
-            <DocIcon size={14} color="#ffffff" /> Cases Breakdown Report →
-          </Link>
+          {/* Summary vs Detailed Table View Toggle */}
+          <div style={{ display: 'inline-flex', padding: 3, borderRadius: 8, background: 'var(--surface-muted, #f1f5f9)', border: '1px solid var(--border)' }}>
+            <button
+              type="button"
+              onClick={() => setViewMode('SUMMARY')}
+              style={{
+                padding: '4px 10px',
+                fontSize: 12,
+                fontWeight: viewMode === 'SUMMARY' ? 700 : 500,
+                border: 'none',
+                borderRadius: 6,
+                background: viewMode === 'SUMMARY' ? '#ffffff' : 'transparent',
+                color: viewMode === 'SUMMARY' ? '#461440' : 'var(--secondary)',
+                boxShadow: viewMode === 'SUMMARY' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Summary View
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('DETAILED')}
+              style={{
+                padding: '4px 10px',
+                fontSize: 12,
+                fontWeight: viewMode === 'DETAILED' ? 700 : 500,
+                border: 'none',
+                borderRadius: 6,
+                background: viewMode === 'DETAILED' ? '#ffffff' : 'transparent',
+                color: viewMode === 'DETAILED' ? '#461440' : 'var(--secondary)',
+                boxShadow: viewMode === 'DETAILED' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Detailed Tables
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Filter Bar - Single Clean Row */}
+      {/* Primary Executive Navigation View Selector */}
+      <ExecutiveNavigation activeView={activeView} onSelectView={setActiveView} />
+
+      {/* Granular & Context-Aware Filter Bar */}
       <form
         onSubmit={handleSearch}
-        aria-label="CEO dashboard filters"
+        aria-label="Executive Filters"
         style={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'flex-end',
-          gap: 12,
-          padding: '16px 20px',
           background: 'var(--card-bg, #ffffff)',
           borderRadius: 14,
           border: '1px solid var(--border)',
-          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.04)',
-          marginBottom: 24,
-          flexWrap: 'wrap',
+          padding: '16px 20px',
+          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)',
+          display: 'grid',
+          gap: 14,
         }}
       >
-        <div style={{ flex: '1 1 180px', minWidth: 140 }}>
-          <label htmlFor="ceo-range" style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>
-            Range
-          </label>
-          <select
-            id="ceo-range"
-            className="input"
-            style={{ height: 40, width: '100%', borderRadius: 8 }}
-            value={range}
-            onChange={(e) => {
-              setRange(e.target.value);
-              if (e.target.value !== 'CUSTOM') {
-                setAppliedFilters((prev) => ({ ...prev, range: e.target.value }));
-              }
-            }}
-          >
-            {CEO_RANGES.map((r) => (
-              <option key={r} value={r}>
-                {RANGE_LABEL[r]}
-              </option>
-            ))}
-          </select>
+        {/* Quick Range Selector Buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--secondary)', marginRight: 4 }}>Time Range:</span>
+          {QUICK_RANGES.map((r) => {
+            const isSelected = range === r.id;
+            return (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => handleQuickRange(r.id)}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: 20,
+                  fontSize: 12,
+                  fontWeight: isSelected ? 700 : 500,
+                  border: isSelected ? '1px solid #461440' : '1px solid var(--border)',
+                  background: isSelected ? '#461440' : 'transparent',
+                  color: isSelected ? '#ffffff' : 'var(--foreground)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {r.label}
+              </button>
+            );
+          })}
         </div>
 
-        <div style={{ flex: '1 1 150px', minWidth: 130 }}>
-          <label htmlFor="ceo-from" style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>
-            From
-          </label>
-          <input
-            id="ceo-from"
-            className="input"
-            type="date"
-            style={{ height: 40, width: '100%', borderRadius: 8 }}
-            value={dateFrom}
-            onChange={(e) => {
-              setDateFrom(e.target.value);
-              if (range !== 'CUSTOM') setRange('CUSTOM');
-            }}
-          />
-        </div>
+        {/* Dynamic Contextual Inputs Row */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          {/* Custom Date Pickers (Shown if Custom Range is selected) */}
+          {(range === 'CUSTOM' || dateFrom || dateTo) && (
+            <>
+              <label style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>
+                From Date
+                <input
+                  type="date"
+                  className="input"
+                  style={{ height: 38, width: 140, display: 'block', marginTop: 4 }}
+                  value={dateFrom}
+                  onChange={(e) => {
+                    setDateFrom(e.target.value);
+                    if (range !== 'CUSTOM') setRange('CUSTOM');
+                  }}
+                />
+              </label>
 
-        <div style={{ flex: '1 1 150px', minWidth: 130 }}>
-          <label htmlFor="ceo-to" style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>
-            To
-          </label>
-          <input
-            id="ceo-to"
-            className="input"
-            type="date"
-            style={{ height: 40, width: '100%', borderRadius: 8 }}
-            value={dateTo}
-            onChange={(e) => {
-              setDateTo(e.target.value);
-              if (range !== 'CUSTOM') setRange('CUSTOM');
-            }}
-          />
-        </div>
+              <label style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>
+                To Date
+                <input
+                  type="date"
+                  className="input"
+                  style={{ height: 38, width: 140, display: 'block', marginTop: 4 }}
+                  value={dateTo}
+                  onChange={(e) => {
+                    setDateTo(e.target.value);
+                    if (range !== 'CUSTOM') setRange('CUSTOM');
+                  }}
+                />
+              </label>
+            </>
+          )}
 
-        <div style={{ flex: '1 1 180px', minWidth: 150 }}>
-          <label htmlFor="ceo-type" style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>
-            Type
-          </label>
-          <select
-            id="ceo-type"
-            className="input"
-            style={{ height: 40, width: '100%', borderRadius: 8 }}
-            value={financeType}
-            onChange={(e) => setFinanceType(e.target.value as any)}
-          >
-            <option value="ALL">All financial types</option>
-            <option value="INCOME">Income only</option>
-            <option value="EXPENSE">Expense only</option>
-            <option value="NET_POSITION">Net position</option>
-          </select>
-        </div>
+          {/* FINANCE Module Filters */}
+          {(activeView === 'FINANCE' || activeView === 'OVERVIEW') && (
+            <>
+              <label style={{ margin: 0, fontSize: 12, fontWeight: 600, minWidth: 160 }}>
+                Financial Type
+                <select
+                  className="input"
+                  style={{ height: 38, width: '100%', display: 'block', marginTop: 4 }}
+                  value={financeType}
+                  onChange={(e) => {
+                    setFinanceType(e.target.value as any);
+                    setSelectedHead('');
+                  }}
+                >
+                  <option value="ALL">All Financial Types</option>
+                  <option value="INCOME">Income Only</option>
+                  <option value="EXPENSE">Expenses Only</option>
+                  <option value="NET_POSITION">Net Position</option>
+                </select>
+              </label>
 
-        <div style={{ flex: '1 1 180px', minWidth: 150 }}>
-          <label htmlFor="ceo-expense-head" style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>
-            Expense head
-          </label>
-          <select
-            id="ceo-expense-head"
-            className="input"
-            style={{ height: 40, width: '100%', borderRadius: 8 }}
-            value={expenseHead}
-            onChange={(e) => setExpenseHead(e.target.value)}
-          >
-            <option value="">All expense heads</option>
-            {expenseHeads.map((h) => (
-              <option key={h.id} value={h.name}>
-                {h.name}
-              </option>
-            ))}
-          </select>
-        </div>
+              <label style={{ margin: 0, fontSize: 12, fontWeight: 600, minWidth: 180 }}>
+                {financeType === 'INCOME' ? 'Income Head' : financeType === 'EXPENSE' ? 'Expense Head' : 'Category / Head'}
+                <select
+                  className="input"
+                  style={{ height: 38, width: '100%', display: 'block', marginTop: 4 }}
+                  value={selectedHead}
+                  onChange={(e) => setSelectedHead(e.target.value)}
+                >
+                  <option value="">All Categories / Heads</option>
+                  {financeType === 'INCOME'
+                    ? incomeHeads.map((h) => <option key={h.id} value={h.name}>{h.name}</option>)
+                    : financeType === 'EXPENSE'
+                    ? expenseHeads.map((h) => <option key={h.id} value={h.name}>{h.name}</option>)
+                    : [
+                        ...incomeHeads.map((h) => <option key={`inc_${h.id}`} value={h.name}>[Income] {h.name}</option>),
+                        ...expenseHeads.map((h) => <option key={`exp_${h.id}`} value={h.name}>[Expense] {h.name}</option>),
+                      ]}
+                </select>
+              </label>
+            </>
+          )}
 
-        <div style={{ display: 'flex', gap: 8, height: 40, flex: '0 0 auto' }}>
-          <button
-            type="submit"
-            className="btn"
-            style={{
-              height: 40,
-              padding: '0 22px',
-              borderRadius: 8,
-              background: '#461440',
-              color: '#ffffff',
-              fontWeight: 700,
-              border: 'none',
-              boxShadow: '0 2px 8px rgba(70, 20, 64, 0.3)',
-              cursor: 'pointer',
-            }}
-          >
-            Search
-          </button>
-          <button
-            type="button"
-            className="btn"
-            style={{ height: 40, padding: '0 18px', borderRadius: 8, cursor: 'pointer' }}
-            onClick={handleClear}
-          >
-            Clear
-          </button>
+          {/* OPERATIONS Module Filters */}
+          {(activeView === 'OPERATIONS' || activeView === 'AGENTS') && (
+            <>
+              <label style={{ margin: 0, fontSize: 12, fontWeight: 600, minWidth: 140 }}>
+                Case Status
+                <select
+                  className="input"
+                  style={{ height: 38, width: '100%', display: 'block', marginTop: 4 }}
+                  value={caseStatus}
+                  onChange={(e) => setCaseStatus(e.target.value)}
+                >
+                  <option value="">All Statuses</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="ACCEPTED">Accepted</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </label>
+
+              <label style={{ margin: 0, fontSize: 12, fontWeight: 600, minWidth: 160 }}>
+                Intake Agent
+                <select
+                  className="input"
+                  style={{ height: 38, width: '100%', display: 'block', marginTop: 4 }}
+                  value={selectedAgent}
+                  onChange={(e) => setSelectedAgent(e.target.value)}
+                >
+                  <option value="">All Agents</option>
+                  {distinctAgents.map((a) => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+
+          {/* Action Buttons */}
+          <div style={{ display: 'flex', gap: 8, height: 38, marginLeft: 'auto' }}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              style={{
+                height: 38,
+                padding: '0 20px',
+                borderRadius: 8,
+                background: '#461440',
+                color: '#ffffff',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Apply Filters
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{ height: 38, padding: '0 16px', borderRadius: 8, cursor: 'pointer' }}
+              onClick={handleClear}
+            >
+              Reset
+            </button>
+          </div>
         </div>
       </form>
 
-      {!customReady && <p style={{ color: 'var(--muted, #94a3b8)' }}>Choose both dates to load the custom range.</p>}
+      {/* Loading & Error States */}
       {q.isLoading && customReady && <Loading />}
       {q.isError && <p className="err" role="alert">{errorMessage(q.error)}</p>}
 
+      {/* STRICT CONDITIONAL RENDERING - Unmounts Unrelated Modules Completely */}
       {d && (
-        <div style={{ display: 'grid', gap: 32 }}>
-          {/* MODULE 1: FINANCE */}
-          <FinanceModule
-            finance={d.finance}
-            trends={d.trends}
-            financeType={appliedFilters.financeType}
-            expenseHead={appliedFilters.expenseHead}
-            totalHeadExpense={totalHeadExpense}
-            headBreakdown={headBreakdown}
-            filteredExpenses={filteredExpenses}
-            onSelectHead={handleHeadSelect}
-          />
+        <div style={{ minHeight: 400 }}>
+          {/* VIEW 1: EXECUTIVE OVERVIEW (Default Landing View) */}
+          {activeView === 'OVERVIEW' && (
+            <ExecutiveOverview dashboard={d} onNavigate={setActiveView} />
+          )}
 
-          {/* MODULE 2: OPERATIONS */}
-          <OperationsModule
-            operations={d.operations}
-            people={d.people}
-            callLength={d.callLength}
-            trends={d.trends}
-            cases={filteredCases}
-            activeTab={operationsTab}
-            onTabChange={setOperationsTab}
-          />
+          {/* VIEW 2: FINANCE & FINANCIAL REPORTS */}
+          {activeView === 'FINANCE' && (
+            <FinanceModule
+              finance={d.finance}
+              trends={d.trends}
+              financeType={appliedFilters.financeType}
+              expenseHead={appliedFilters.head}
+              totalHeadExpense={totalHeadExpense}
+              headBreakdown={headBreakdown}
+              filteredExpenses={filteredExpenses}
+              filteredIncomes={filteredIncomes}
+              viewMode={viewMode}
+              onSelectHead={(h) => {
+                setSelectedHead(h);
+                setAppliedFilters((prev) => ({ ...prev, head: h }));
+              }}
+            />
+          )}
+
+          {/* VIEW 3: OPERATIONS & CASES REPORTS */}
+          {activeView === 'OPERATIONS' && (
+            <OperationsModule
+              operations={d.operations}
+              trends={d.trends}
+              cases={filteredCases}
+              statusFilter={appliedFilters.caseStatus}
+              agentFilter={appliedFilters.agent}
+            />
+          )}
+
+          {/* VIEW 4: AGENT & TEAM PERFORMANCE */}
+          {activeView === 'AGENTS' && (
+            <AgentPerformanceModule
+              cases={filteredCases}
+              callLength={d.callLength}
+            />
+          )}
+
+          {/* VIEW 5: AUDIT & COMPLIANCE LOGS */}
+          {activeView === 'AUDIT' && (
+            <AuditComplianceModule
+              logs={filteredAuditLogs}
+            />
+          )}
         </div>
       )}
     </main>

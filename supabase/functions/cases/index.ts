@@ -433,12 +433,11 @@ Deno.serve(async (req: Request) => {
       .select(`
         *,
         customer:customers(*),
-        callRecord:call_records(*),
         agent:agentId(id, fullName),
         teamLeader:teamLeaderId(id, fullName)
       `)
       .eq('id', caseId)
-      .single();
+      .maybeSingle();
 
     return jsonResponse({ data: updatedData || targetCase });
   }
