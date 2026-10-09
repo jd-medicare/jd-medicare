@@ -63,27 +63,43 @@ export const outsourceService = {
   },
 
   summary: async () => {
-    // Try server first
-    const s = await api.call('outsource.summary', { schema: OutsourceSummary }).catch(() => null);
-    if (s?.data && s.data.total > 0) return s;
-
-    // Dynamically calculate from unified cases
+    // Dynamically calculate from unified cases to ensure real-time accuracy and instant updates
     const all = await getUnifiedCases();
-    const total = all.length;
-    const accepted = all.filter((c) => c.status === 'ACCEPTED').length;
-    const rejected = all.filter((c) => c.status === 'REJECTED').length;
-    const remaining = all.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED').length;
-    const processed = accepted + rejected;
+    if (all && all.length > 0) {
+      const total = all.length;
+      const accepted = all.filter((c) => c.status === 'ACCEPTED').length;
+      const rejected = all.filter((c) => c.status === 'REJECTED').length;
+      const pending = all.filter((c) => c.status === 'PENDING' || c.status === 'SUBMITTED').length;
+      const processed = accepted + rejected;
+
+      return {
+        data: {
+          total,
+          remaining: pending,
+          pending,
+          accepted,
+          rejected,
+          processingRate: total > 0 ? Math.round((processed / total) * 100) : 0,
+          acceptanceRate: processed > 0 ? Math.round((accepted / processed) * 100) : 0,
+          rejectionRate: processed > 0 ? Math.round((rejected / processed) * 100) : 0,
+        },
+      };
+    }
+
+    // Try server cases endpoint
+    const s = await api.call('outsource.summary', { schema: OutsourceSummary }).catch(() => null);
+    if (s?.data) return s;
 
     return {
       data: {
-        total,
-        remaining,
-        accepted,
-        rejected,
-        processingRate: total > 0 ? Math.round((processed / total) * 100) : 0,
-        acceptanceRate: processed > 0 ? Math.round((accepted / processed) * 100) : 0,
-        rejectionRate: processed > 0 ? Math.round((rejected / processed) * 100) : 0,
+        total: 0,
+        remaining: 0,
+        pending: 0,
+        accepted: 0,
+        rejected: 0,
+        processingRate: 0,
+        acceptanceRate: 0,
+        rejectionRate: 0,
       },
     };
   },

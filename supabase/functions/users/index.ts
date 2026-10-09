@@ -118,9 +118,10 @@ async function syncUserPermissions(client: any, userId: string, rawItems: string
   for (const p of assignedKeys) {
     if (p.startsWith('customer:')) inferredMenus.push('CUSTOMERS');
     if (p.startsWith('case:')) {
-      inferredMenus.push('CASES');
       if (p === 'case:accept' || p === 'case:reject' || p === 'case:modify_processed') {
         inferredMenus.push('OUTSOURCE');
+      } else {
+        inferredMenus.push('CASES');
       }
     }
     if (p.startsWith('call_length:')) inferredMenus.push('CASES');
@@ -317,6 +318,9 @@ Deno.serve(async (req: Request) => {
       if (roleKey === 'AGENT') {
         await syncUserMenus(client, authUserId, ['CUSTOMERS']);
         await syncUserPermissions(client, authUserId, ['customer:create', 'customer:view']);
+      } else if (roleKey === 'OUTSOURCE') {
+        await syncUserMenus(client, authUserId, ['OUTSOURCE', 'REPORTS']);
+        await syncUserPermissions(client, authUserId, ['case:view', 'case:accept', 'case:reject', 'call_length:view', 'report:view']);
       }
     }
 

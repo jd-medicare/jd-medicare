@@ -44,10 +44,11 @@ export default function OutsourcePage({ user }: { user: SessionUserDto }) {
   const s = summary.data?.data;
   const cols = canProcess ? 10 : 9;
 
+  const pendingCount = s?.pending ?? s?.remaining ?? 0;
   const kpis: Array<[string, string | number]> = s
     ? [
         ['Total', s.total],
-        ['Remaining', s.remaining],
+        ['Pending', pendingCount],
         ['Accepted', s.accepted],
         ['Rejected', s.rejected],
         ['Processed', `${s.processingRate}%`],

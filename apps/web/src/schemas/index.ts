@@ -126,10 +126,10 @@ export const OutsourceSummary = z
     rejectionRate: z.number().optional(),
   })
   .transform((s) => {
-    const tot = s.total ?? s.totalProcessed ?? 0;
     const acc = s.accepted ?? s.acceptedCount ?? 0;
     const rej = s.rejected ?? s.rejectedCount ?? 0;
-    const rem = s.remaining ?? s.pending ?? 0;
+    const rem = s.pending ?? s.remaining ?? 0;
+    const tot = s.total !== undefined ? s.total : rem + acc + rej;
     const rate = s.processingRate ?? (tot > 0 ? Math.round(((acc + rej) / tot) * 100) : 0);
     return {
       total: tot,

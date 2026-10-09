@@ -52,27 +52,36 @@ Deno.serve(async (req: Request) => {
 
   // GET /summary
   if (req.method === 'GET' && pathname === '/summary') {
-    const permErr = requirePermission(user, 'report:view');
+    const permErr = requirePermission(user, 'case:view');
     if (permErr) return permErr;
 
-    const { data: actions, error } = await client
-      .from('accept_reject_actions')
-      .select('decision')
-      .eq('organizationId', user.organizationId)
-      .eq('actorId', user.id);
+    const { data: cases, error } = await client
+      .from('cases')
+      .select('id, status')
+      .eq('organizationId', user.organizationId);
 
     if (error) return errorResponse('VALIDATION_ERROR', error.message);
 
-    const total = actions?.length || 0;
-    const accepted = actions?.filter((a: any) => a.decision === 'ACCEPT').length || 0;
-    const rejected = actions?.filter((a: any) => a.decision === 'REJECT').length || 0;
+    const allCases = cases || [];
+    const total = allCases.length;
+    const accepted = allCases.filter((c: any) => c.status === 'ACCEPTED').length;
+    const rejected = allCases.filter((c: any) => c.status === 'REJECTED').length;
+    const pending = allCases.filter((c: any) => c.status === 'PENDING' || c.status === 'SUBMITTED').length;
+    const processed = accepted + rejected;
 
     return jsonResponse({
       data: {
-        totalProcessed: total,
+        total,
+        remaining: pending,
+        pending,
+        accepted,
         acceptedCount: accepted,
+        rejected,
         rejectedCount: rejected,
-        acceptanceRate: total > 0 ? (accepted / total) * 100 : 0,
+        totalProcessed: processed,
+        processingRate: total > 0 ? Math.round((processed / total) * 100) : 0,
+        acceptanceRate: processed > 0 ? Math.round((accepted / processed) * 100) : 0,
+        rejectionRate: processed > 0 ? Math.round((rejected / processed) * 100) : 0,
       },
     });
   }

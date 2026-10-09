@@ -224,6 +224,7 @@ function useCatalog(enabled: boolean) {
 
   const defaultsFor = (k: string) => {
     if (k === 'AGENT') return ['CUSTOMERS'];
+    if (k === 'OUTSOURCE') return ['OUTSOURCE', 'REPORTS'];
     const fromRole = roleList.find((r) => r.key === k)?.menus;
     if (fromRole && fromRole.length > 0) return fromRole.map((x) => x.toUpperCase()).filter((x) => !isUuid(x));
     return (((DEFAULT_ROLE_MENUS[k as RoleKey] || ['CUSTOMERS']) as readonly string[])

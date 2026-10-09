@@ -55,7 +55,7 @@ export function isSuperUser(u?: SessionUserDto | { isPrimarySuperAdmin?: boolean
 export const NAV: NavItem[] = [
   { menu: 'CUSTOMERS', label: 'New customer', path: '/customers/new', perm: 'customer:create' },
   { menu: 'CASES', label: 'Cases', path: '/cases', perm: 'case:view' },
-  { menu: 'CASES', label: 'Agents', path: '/team/agents', perm: 'case:view' },
+  { menu: 'ADMINISTRATION', label: 'Agents', path: '/team/agents', perm: 'user:view' },
   { menu: 'OUTSOURCE', label: 'Outsource', path: '/outsource', perm: 'case:view' },
   { menu: 'REPORTS', label: 'Reports', path: '/reports', perm: 'report:view' },
   { menu: 'CEO', label: 'CEO dashboard', path: '/ceo', perm: 'ceo:dashboard' },
@@ -71,11 +71,12 @@ export function getMenusForPermissions(permissions: string[]): string[] {
   const menus = new Set<string>(['DASHBOARD']);
   for (const p of permissions || []) {
     const lower = p.toLowerCase();
-    if (lower.startsWith('customer:')) menus.add('CUSTOMERS');
+    if (lower.startsWith('customer:') && lower !== 'customer:view') menus.add('CUSTOMERS');
     if (lower.startsWith('case:')) {
-      menus.add('CASES');
       if (lower === 'case:accept' || lower === 'case:reject' || lower === 'case:modify_processed') {
         menus.add('OUTSOURCE');
+      } else {
+        menus.add('CASES');
       }
     }
     if (lower.startsWith('call_length:')) menus.add('CASES');
@@ -99,9 +100,9 @@ export function canAccessPathByPermissions(perms: string[], path: string): boole
   if (perms.includes('*')) return true;
   const pSet = new Set(perms.map((x) => x.toLowerCase()));
 
-  if (path === '/customers/new') return pSet.has('customer:create') || pSet.has('customer:update') || pSet.has('customer:view');
+  if (path === '/customers/new') return pSet.has('customer:create');
   if (path === '/cases') return pSet.has('case:view') || pSet.has('case:create') || pSet.has('case:update') || pSet.has('case:accept');
-  if (path === '/team/agents') return pSet.has('case:view') || pSet.has('user:view');
+  if (path === '/team/agents') return pSet.has('user:view') && !pSet.has('case:accept');
   if (path === '/outsource') return pSet.has('case:accept') || pSet.has('case:reject') || pSet.has('case:modify_processed') || pSet.has('case:view');
   if (path === '/reports') return pSet.has('report:view') || pSet.has('report:export');
   if (path === '/ceo') return pSet.has('ceo:dashboard');
@@ -146,11 +147,17 @@ export const navFor = (u: SessionUserDto) => {
     });
   }
 
-  // Agents cannot manage other agents unless granted explicit user/case permission
-  if (u.roleKey === 'AGENT' && !u.permissions?.includes('user:view') && !u.permissions?.includes('*')) {
-    list = list.filter((n) => n.path !== '/team/agents');
+  // 1. Outsource users must NEVER see Agents (/team/agents) or New Customer (/customers/new)
+  if (u.roleKey === 'OUTSOURCE') {
+    list = list.filter((n) => n.path !== '/team/agents' && n.path !== '/customers/new');
   }
-  // Team Leader must not see Audit log unless granted explicit audit permission by admin/superadmin
+
+  // 2. Agents must strictly see ONLY New Customer (/customers/new)
+  if (u.roleKey === 'AGENT') {
+    list = list.filter((n) => n.path === '/customers/new');
+  }
+
+  // 3. Team Leader must not see Audit log unless granted explicit audit permission by admin/superadmin
   if (u.roleKey === 'TEAM_LEADER' && !u.permissions?.includes('audit:view') && !u.permissions?.includes('*')) {
     list = list.filter((n) => n.path !== '/admin/audit');
   }
