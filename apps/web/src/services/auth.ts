@@ -4,6 +4,7 @@ import { api } from './api-client';
 import { supabase } from './supabase';
 import { LoginResult, SessionUserDto } from '../schemas';
 import { DEFAULT_ROLE_MENUS, type RoleKey } from '@shared/enums';
+import { getMenusForPermissions } from '../app/nav';
 
 export const authService = {
   login: async (b: { email: string; password: string }) => {
@@ -114,6 +115,19 @@ export const authService = {
       (Array.isArray(rawUser.permissions) && rawUser.permissions.includes('*'))
     );
 
+    let userPerms: string[] = isSuper ? ['*'] : (rawUser.permissions || []);
+    if (!isSuper) {
+      try {
+        const cachedPerms = localStorage.getItem(`perms_${rawUser.id}`);
+        if (cachedPerms) {
+          const parsed = JSON.parse(cachedPerms);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            userPerms = Array.from(new Set([...userPerms, ...parsed]));
+          }
+        }
+      } catch {}
+    }
+
     let userMenus: string[] = rawUser.menus || [];
     if (!userMenus || userMenus.length === 0) {
       try {
@@ -124,6 +138,13 @@ export const authService = {
     if ((!userMenus || userMenus.length === 0) && !isSuper) {
       userMenus = [...(DEFAULT_ROLE_MENUS[roleKey as RoleKey] || ['CUSTOMERS', 'CASES'])];
     }
+
+    // Automatically add menus matching the user's permissions
+    if (!isSuper) {
+      const inferred = getMenusForPermissions(userPerms);
+      userMenus = Array.from(new Set([...userMenus, ...inferred]));
+    }
+
     if (isSuper) {
       userMenus = ['DASHBOARD', 'CUSTOMERS', 'CASES', 'OUTSOURCE', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO', 'ADMINISTRATION'];
     }
@@ -134,7 +155,7 @@ export const authService = {
       fullName: rawUser.fullName,
       organizationId: rawUser.organizationId,
       roleKey,
-      permissions: isSuper ? ['*'] : (rawUser.permissions || []),
+      permissions: isSuper ? ['*'] : userPerms,
       menus: userMenus,
       mfaEnabled: Boolean(rawUser.mfaEnabled),
       isPrimarySuperAdmin: isSuper,

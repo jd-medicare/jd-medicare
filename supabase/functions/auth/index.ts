@@ -162,6 +162,27 @@ Deno.serve(async (req: Request) => {
       menus = ROLE_MENUS_FALLBACK[auth.user.roleKey] || ['DASHBOARD', 'CUSTOMERS', 'CASES'];
     }
 
+    // Automatically ensure all menus corresponding to user permissions are open
+    const userPermArray = Array.from(auth.user.permissions || []);
+    for (const p of userPermArray) {
+      const lower = p.toLowerCase();
+      if (lower.startsWith('customer:') && !menus.includes('CUSTOMERS')) menus.push('CUSTOMERS');
+      if (lower.startsWith('case:') && !menus.includes('CASES')) menus.push('CASES');
+      if ((lower === 'case:accept' || lower === 'case:reject' || lower === 'case:modify_processed') && !menus.includes('OUTSOURCE')) menus.push('OUTSOURCE');
+      if (lower.startsWith('call_length:') && !menus.includes('CASES')) menus.push('CASES');
+      if (lower.startsWith('report:') && !menus.includes('REPORTS')) menus.push('REPORTS');
+      if ((lower.startsWith('finance:') || lower.startsWith('income:')) && !menus.includes('FINANCE')) menus.push('FINANCE');
+      if ((lower.startsWith('expense:') || lower.startsWith('expense_head:')) && !menus.includes('EXPENSES')) menus.push('EXPENSES');
+      if (lower.startsWith('ceo:') && !menus.includes('CEO')) menus.push('CEO');
+      if ((lower.startsWith('user:') || lower.startsWith('role:') || lower.startsWith('permission:') || lower.startsWith('menu:')) && !menus.includes('ADMINISTRATION')) {
+        menus.push('ADMINISTRATION');
+      }
+      if (lower.startsWith('audit:')) {
+        if (!menus.includes('ADMINISTRATION')) menus.push('ADMINISTRATION');
+        if (!menus.includes('CEO')) menus.push('CEO');
+      }
+    }
+
     // Fetch organization info
     const { data: org } = await client
       .from('organizations')

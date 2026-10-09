@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_ROLE_MENUS, DEFAULT_ROLE_PERMISSIONS, MENUS, ROLE_KEYS, type RoleKey } from '@shared/enums';
-import { getCustomMenus } from '../../app/nav';
+import { getCustomMenus, getMenusForPermissions } from '../../app/nav';
 import { adminService } from '../../services/admin';
 import { authService } from '../../services/auth';
 import { supabase } from '../../services/supabase';
@@ -426,14 +426,44 @@ export function PermissionsDialog({ target, onClose }: { target: UserDto | null;
       const defaults = DEFAULT_ROLE_PERMISSIONS[target.roleKey as RoleKey] ?? [];
       setSel(new Set(defaults));
     }
+
+    let cancelled = false;
+    async function loadLatestDbPerms() {
+      try {
+        const { data: dbPerms } = await supabase
+          .from('user_permissions')
+          .select('permissions:permissionId(key)')
+          .eq('userId', target!.id);
+        if (!cancelled && dbPerms && dbPerms.length > 0) {
+          const keys = dbPerms.map((p: any) => p.permissions?.key).filter(Boolean);
+          if (keys.length > 0) {
+            setSel(new Set(keys));
+            setSavedPerms(target!.id, keys);
+          }
+        }
+      } catch {}
+    }
+    loadLatestDbPerms();
+    return () => { cancelled = true; };
   }, [target]);
   const isPSA = Boolean(target?.isPrimarySuperAdmin || target?.roleKey === 'PRIMARY_SUPER_ADMIN');
   const m = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const permKeys = [...sel].sort();
       const keyToId = new Map(list.data?.data.map((p) => [p.key, p.id]) ?? []);
       const permIds = permKeys.map((k) => keyToId.get(k) || k);
-      return adminService.setPermissions(target!.id, permKeys, permIds);
+
+      // 1. Set permissions
+      await adminService.setPermissions(target!.id, permKeys, permIds);
+
+      // 2. Automatically sync menus corresponding to these permissions
+      const inferredMenus = getMenusForPermissions(permKeys);
+      const existingMenus = getSavedMenus(target!.id) || target!.menus || [];
+      const mergedMenus = Array.from(new Set([...existingMenus, ...inferredMenus]));
+      setSavedMenus(target!.id, mergedMenus);
+      await adminService.setMenus(target!.id, mergedMenus).catch(() => null);
+
+      return { success: true };
     },
     onSuccess: () => {
       recordAudit('PERMISSIONS_UPDATED', 'user', target!.id, {
@@ -442,6 +472,7 @@ export function PermissionsDialog({ target, onClose }: { target: UserDto | null;
       });
       setSavedPerms(target!.id, [...sel].sort());
       qc.invalidateQueries({ queryKey: ['users'] });
+      qc.invalidateQueries({ queryKey: ['session'] });
       onClose();
     },
   });

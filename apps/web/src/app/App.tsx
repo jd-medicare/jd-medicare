@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { authService } from '../services/auth';
 import type { SessionUserDto } from '../schemas';
 import { AppShell } from './AppShell';
-import { homeFor, NAV, isSuperUser } from './nav';
+import { homeFor, NAV, isSuperUser, canAccessPathByPermissions } from './nav';
 const LoginPage = lazy(() => import('../features/auth/LoginPage'));
 const ForgotPasswordPage = lazy(() => import('../features/auth/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('../features/auth/ResetPasswordPage'));
@@ -23,21 +23,27 @@ const FinancePage = lazy(() => import('../features/finance/FinancePage'));
 const useSession = () => useQuery({ queryKey: ['session'], queryFn: async () => (await authService.me()).data });
 const Skeleton = () => <div className="skeleton" style={{ height: 200, margin: 24 }} aria-busy="true" />;
 // UI gate only; the backend decides.
-function Guard({ menu, perm, children }: { menu?: string; perm?: string; children: (u: SessionUserDto) => ReactNode }) {
+function Guard({ menu, perm, path, children }: { menu?: string; perm?: string; path?: string; children: (u: SessionUserDto) => ReactNode }) {
   const { data: user, isLoading, isError } = useSession();
   if (isLoading) return <Skeleton />;
   if (isError || !user) return <Navigate to="/login" replace />;
   const isSuper = isSuperUser(user);
   const userMenus = (user.menus || []).map((m) => m.toUpperCase());
-  const hasMenu = menu ? userMenus.includes(menu.toUpperCase()) : true;
-  const hasPerm = perm ? (user.permissions.includes(perm) || user.permissions.includes('*')) : true;
-  const denied = !isSuper && (!hasMenu || !hasPerm);
+  const userPerms = user.permissions || [];
+  const hasWildcard = isSuper || userPerms.includes('*');
+
+  const hasMenu = menu ? userMenus.includes(menu.toUpperCase()) : false;
+  const hasPerm = perm ? (userPerms.includes(perm) || hasWildcard) : false;
+  const hasPathPerm = path ? canAccessPathByPermissions(userPerms, path) : false;
+
+  const allowed = hasWildcard || hasPerm || hasPathPerm || hasMenu || (!menu && !perm && !path);
+  const denied = !allowed;
   return <AppShell user={user}>{denied ? <p role="alert" style={{ padding: 24 }}>You do not have access to this page.</p> : children(user)}</AppShell>;
 }
 /** Gate taken from the nav table so a route and its nav link can never disagree. */
 function R({ nav, children }: { nav: string; children: (u: SessionUserDto) => ReactNode }) {
   const n = NAV.find((x) => x.path === nav);
-  return <Guard menu={n?.menu} perm={n?.perm}>{children}</Guard>;
+  return <Guard menu={n?.menu} perm={n?.perm} path={nav}>{children}</Guard>;
 }
 function Home() {
   const { data: user, isLoading, isError } = useSession();

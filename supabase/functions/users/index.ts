@@ -56,6 +56,98 @@ async function syncUserMenus(client: any, userId: string, rawItems: string[]) {
   }
 }
 
+async function syncUserPermissions(client: any, userId: string, rawItems: string[]) {
+  if (!rawItems || rawItems.length === 0) {
+    await client.from('user_permissions').delete().eq('userId', userId);
+    return;
+  }
+
+  const { data: dbPerms } = await client.from('permissions').select('id, key');
+  const keyToId = new Map<string, string>();
+  const idToId = new Set<string>();
+
+  if (dbPerms) {
+    for (const p of dbPerms) {
+      if (p.key) keyToId.set(p.key.toLowerCase(), p.id);
+      if (p.id) idToId.add(p.id);
+    }
+  }
+
+  const validPermissionIds: string[] = [];
+  const assignedKeys: string[] = [];
+
+  for (const item of rawItems) {
+    const trimmed = String(item || '').trim();
+    if (!trimmed) continue;
+
+    if (idToId.has(trimmed)) {
+      validPermissionIds.push(trimmed);
+      const k = dbPerms?.find((p: any) => p.id === trimmed)?.key;
+      if (k) assignedKeys.push(k.toLowerCase());
+    } else {
+      const lower = trimmed.toLowerCase();
+      let foundId = keyToId.get(lower);
+      if (!foundId) {
+        const { data: newPerm } = await client
+          .from('permissions')
+          .insert({ key: lower, description: lower })
+          .select('id, key')
+          .maybeSingle();
+        if (newPerm?.id) {
+          foundId = newPerm.id;
+          keyToId.set(lower, foundId);
+          idToId.add(foundId);
+        }
+      }
+      if (foundId && !validPermissionIds.includes(foundId)) {
+        validPermissionIds.push(foundId);
+        assignedKeys.push(lower);
+      }
+    }
+  }
+
+  await client.from('user_permissions').delete().eq('userId', userId);
+  if (validPermissionIds.length > 0) {
+    await client.from('user_permissions').insert(
+      validPermissionIds.map((pId) => ({ userId, permissionId: pId }))
+    );
+  }
+
+  // Infer menus corresponding to assigned permissions and automatically sync
+  const inferredMenus: string[] = [];
+  for (const p of assignedKeys) {
+    if (p.startsWith('customer:')) inferredMenus.push('CUSTOMERS');
+    if (p.startsWith('case:')) {
+      inferredMenus.push('CASES');
+      if (p === 'case:accept' || p === 'case:reject' || p === 'case:modify_processed') {
+        inferredMenus.push('OUTSOURCE');
+      }
+    }
+    if (p.startsWith('call_length:')) inferredMenus.push('CASES');
+    if (p.startsWith('report:')) inferredMenus.push('REPORTS');
+    if (p.startsWith('finance:') || p.startsWith('income:')) inferredMenus.push('FINANCE');
+    if (p.startsWith('expense:') || p.startsWith('expense_head:')) inferredMenus.push('EXPENSES');
+    if (p.startsWith('ceo:')) inferredMenus.push('CEO');
+    if (p.startsWith('user:') || p.startsWith('role:') || p.startsWith('permission:') || p.startsWith('menu:')) {
+      inferredMenus.push('ADMINISTRATION');
+    }
+    if (p.startsWith('audit:')) {
+      inferredMenus.push('ADMINISTRATION');
+      inferredMenus.push('CEO');
+    }
+  }
+
+  if (inferredMenus.length > 0) {
+    const { data: existingUserMenus } = await client
+      .from('user_menus')
+      .select('menus:menuId(key)')
+      .eq('userId', userId);
+    const currentMenuKeys = (existingUserMenus || []).map((m: any) => m.menus?.key).filter(Boolean);
+    const combinedMenus = Array.from(new Set([...currentMenuKeys, ...inferredMenus]));
+    await syncUserMenus(client, userId, combinedMenus);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -100,11 +192,47 @@ Deno.serve(async (req: Request) => {
     const { data, count, error } = await query;
     if (error) return errorResponse('VALIDATION_ERROR', error.message);
 
+    const userIds = (data || []).map((u: any) => u.id);
+    const permsByUser: Record<string, string[]> = {};
+    const menusByUser: Record<string, string[]> = {};
+
+    if (userIds.length > 0) {
+      const { data: dbUserPerms } = await client
+        .from('user_permissions')
+        .select('userId, permissions:permissionId(key)')
+        .in('userId', userIds);
+      if (dbUserPerms) {
+        for (const up of dbUserPerms as any[]) {
+          const k = up.permissions?.key;
+          if (k) {
+            if (!permsByUser[up.userId]) permsByUser[up.userId] = [];
+            permsByUser[up.userId].push(k);
+          }
+        }
+      }
+
+      const { data: dbUserMenus } = await client
+        .from('user_menus')
+        .select('userId, menus:menuId(key)')
+        .in('userId', userIds);
+      if (dbUserMenus) {
+        for (const um of dbUserMenus as any[]) {
+          const k = um.menus?.key;
+          if (k) {
+            if (!menusByUser[um.userId]) menusByUser[um.userId] = [];
+            menusByUser[um.userId].push(k);
+          }
+        }
+      }
+    }
+
     return jsonResponse({
       data: (data || []).map((u: any) => ({
         ...u,
         role: u.roles?.key,
         roleName: u.roles?.name,
+        permissions: permsByUser[u.id] || [],
+        menus: menusByUser[u.id] || [],
       })),
       meta: {
         page,
@@ -210,7 +338,26 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (error || !data) return errorResponse('NOT_FOUND', 'User not found');
-    return jsonResponse({ data });
+
+    const { data: dbUserPerms } = await client
+      .from('user_permissions')
+      .select('permissions:permissionId(key)')
+      .eq('userId', targetId);
+    const userPermKeys = (dbUserPerms || []).map((up: any) => up.permissions?.key).filter(Boolean);
+
+    const { data: dbUserMenus } = await client
+      .from('user_menus')
+      .select('menus:menuId(key)')
+      .eq('userId', targetId);
+    const userMenuKeys = (dbUserMenus || []).map((um: any) => um.menus?.key).filter(Boolean);
+
+    return jsonResponse({
+      data: {
+        ...data,
+        permissions: userPermKeys,
+        menus: userMenuKeys,
+      },
+    });
   }
 
   // PATCH /:id
@@ -421,14 +568,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json().catch(() => ({}));
-    const permissionIds: string[] = body.permissionIds || [];
+    const rawPerms = body.permissions || body.permissionIds || [];
 
-    await client.from('user_permissions').delete().eq('userId', targetId);
-    if (permissionIds.length > 0) {
-      await client.from('user_permissions').insert(
-        permissionIds.map((pId) => ({ userId: targetId, permissionId: pId }))
-      );
-    }
+    await syncUserPermissions(client, targetId, rawPerms);
     return jsonResponse({ data: { success: true } });
   }
 
