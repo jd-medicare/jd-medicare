@@ -58,13 +58,17 @@ export const RoleDto = z
     menus: z.array(z.string()).nullish().default([]),
     menuIds: z.array(z.string()).nullish().default([]),
   })
-  .transform((r) => ({
-    id: r.id || r.key,
-    key: r.key,
-    name: r.name || r.key,
-    permissions: (r.permissions && r.permissions.length ? r.permissions : r.permissionIds) ?? [],
-    menus: (r.menus && r.menus.length ? r.menus : r.menuIds) ?? [],
-  }));
+  .transform((r) => {
+    const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    const validMenus = (r.menus && r.menus.length ? r.menus : r.menuIds ?? []).filter((m) => !isUuid(m));
+    return {
+      id: r.id || r.key,
+      key: r.key,
+      name: r.name || r.key,
+      permissions: (r.permissions && r.permissions.length ? r.permissions : r.permissionIds) ?? [],
+      menus: validMenus,
+    };
+  });
 export type RoleDto = z.infer<typeof RoleDto>;
 
 export const MenuDto = z

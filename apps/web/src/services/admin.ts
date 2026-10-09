@@ -6,7 +6,7 @@ import { fetchAuditLogs } from './audit';
 
 import { supabase } from './supabase';
 import { PERMISSIONS } from '@shared/enums';
-import { getMenusForPermissions } from '../app/nav';
+import { deleteCustomMenu, getMenusForPermissions } from '../app/nav';
 
 export const MutationResultDto = z.union([
   UserDto,
@@ -408,6 +408,33 @@ export const adminService = {
       }
       return { data: { success: true } };
     }
+  },
+  deleteMenu: async (key: string) => {
+    const cleanKey = key.trim().toUpperCase();
+    deleteCustomMenu(cleanKey);
+
+    const { data: s } = await supabase.auth.getSession();
+    const token = s?.session?.access_token || '';
+    const url = `${import.meta.env.VITE_SUPABASE_URL || 'https://hzdtwpvwxjmgnhkjjicb.supabase.co'}/functions/v1/roles-permissions/menus/${encodeURIComponent(cleanKey)}`;
+    await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_Whjx3raRdRM6X0lwbDtHmQ_XB5ypfev',
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    }).catch(() => null);
+
+    try {
+      const { data: menuRow } = await supabase.from('menus').select('id, key').eq('key', cleanKey).maybeSingle();
+      if (menuRow?.id) {
+        await supabase.from('role_menus').delete().eq('menuId', menuRow.id);
+        await supabase.from('user_menus').delete().eq('menuId', menuRow.id);
+        await supabase.from('menus').delete().eq('id', menuRow.id);
+      }
+    } catch {}
+
+    return { data: { success: true } };
   },
   audit: (q: ListQuery) => fetchAuditLogs(q),
 };

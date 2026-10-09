@@ -17,7 +17,28 @@ const Actions = ({ onClose, busy, label, danger }: { onClose: () => void; busy: 
     <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} disabled={busy}>{label}</button>
   </div>);
 
+const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+const MENU_LABELS: Record<string, string> = {
+  CUSTOMERS: 'New Customer',
+  CASES: 'Cases',
+  DASHBOARD: 'Dashboard',
+  OUTSOURCE: 'Outsource',
+  REPORTS: 'Reports',
+  FINANCE: 'Finance',
+  EXPENSES: 'Expenses',
+  CEO: 'CEO Dashboard',
+  ADMINISTRATION: 'Administration',
+};
+
 const nice = (k: string) => k.split('_').map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+
+const menuDisplayName = (k: string) => {
+  if (!k || isUuid(k)) return '';
+  const upper = k.toUpperCase();
+  return MENU_LABELS[upper] || nice(k);
+};
+
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
 function getSavedPerms(userId: string): string[] | null {
@@ -75,10 +96,12 @@ function MenuPicker({
   onChange: (m: string[]) => void;
   onResetDefaults?: () => void;
 }) {
-  const normalizedValue = value.map((x) => x.toUpperCase());
+  const sanitizedAll = all.filter((k) => !isUuid(k));
+  const normalizedValue = value.map((x) => x.toUpperCase()).filter((k) => !isUuid(k));
 
   const toggle = (k: string) => {
     const key = k.toUpperCase();
+    if (isUuid(key)) return;
     if (normalizedValue.includes(key)) {
       onChange(normalizedValue.filter((x) => x !== key));
     } else {
@@ -88,7 +111,7 @@ function MenuPicker({
 
   const handleSelectDropdown = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosen = e.target.value;
-    if (!chosen) return;
+    if (!chosen || isUuid(chosen)) return;
     const key = chosen.toUpperCase();
     if (!normalizedValue.includes(key)) {
       onChange([...normalizedValue, key]);
@@ -96,7 +119,7 @@ function MenuPicker({
     e.target.value = '';
   };
 
-  const selectAll = () => onChange(all.map((x) => x.toUpperCase()));
+  const selectAll = () => onChange(sanitizedAll.map((x) => x.toUpperCase()));
   const clearAll = () => onChange([]);
 
   return (
@@ -134,11 +157,11 @@ function MenuPicker({
           <option value="" disabled>
             — Select a menu to assign —
           </option>
-          {all.map((k) => {
+          {sanitizedAll.map((k) => {
             const isAssigned = normalizedValue.includes(k.toUpperCase());
             return (
               <option key={k} value={k}>
-                {nice(k)} {isAssigned ? '✓ (Assigned)' : '+ Add'}
+                {menuDisplayName(k)} {isAssigned ? '✓ (Assigned)' : '+ Add'}
               </option>
             );
           })}
@@ -147,7 +170,7 @@ function MenuPicker({
 
       {/* Interactive toggle pills / checkboxes */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 6 }}>
-        {all.map((k) => {
+        {sanitizedAll.map((k) => {
           const isChecked = normalizedValue.includes(k.toUpperCase());
           return (
             <label
@@ -174,7 +197,7 @@ function MenuPicker({
                 onChange={() => toggle(k)}
                 style={{ accentColor: 'var(--primary, #3b82f6)' }}
               />
-              <span>{nice(k)}</span>
+              <span>{menuDisplayName(k)}</span>
             </label>
           );
         })}
@@ -190,15 +213,22 @@ function useCatalog(enabled: boolean) {
   const roleList = (roles.data?.data ?? ROLE_KEYS.map((k) => ({ key: k as string, name: nice(k), permissions: [] as string[], menus: [...DEFAULT_ROLE_MENUS[k]] as string[] })))
     .filter((r) => r.key !== 'PRIMARY_SUPER_ADMIN');
 
-  const customKeys = getCustomMenus().map((c) => c.key.toUpperCase());
-  const backendKeys = (menus.data?.data || []).map((m: any) => m.key?.toUpperCase()).filter(Boolean);
-  const menuList = Array.from(new Set([...backendKeys, ...[...MENUS], ...customKeys]));
+  const customKeys = getCustomMenus()
+    .map((c) => c.key.toUpperCase())
+    .filter((k) => !isUuid(k));
+  const backendKeys = (menus.data?.data || [])
+    .map((m: any) => m.key?.toUpperCase())
+    .filter((k: any) => Boolean(k) && !isUuid(k));
+  const menuList = Array.from(new Set([...backendKeys, ...[...MENUS], ...customKeys]))
+    .filter((k) => !isUuid(k));
 
   const defaultsFor = (k: string) => {
     if (k === 'AGENT') return ['CUSTOMERS'];
     const fromRole = roleList.find((r) => r.key === k)?.menus;
-    if (fromRole && fromRole.length > 0) return fromRole.map((x) => x.toUpperCase());
-    return ((DEFAULT_ROLE_MENUS[k as RoleKey] || ['CUSTOMERS']) as readonly string[]).map((x) => x.toUpperCase());
+    if (fromRole && fromRole.length > 0) return fromRole.map((x) => x.toUpperCase()).filter((x) => !isUuid(x));
+    return (((DEFAULT_ROLE_MENUS[k as RoleKey] || ['CUSTOMERS']) as readonly string[])
+      .map((x) => x.toUpperCase()))
+      .filter((x) => !isUuid(x));
   };
 
   return { roleList, menuList, defaultsFor, rawMenus: menus.data?.data, rawRoles: roles.data?.data };
@@ -317,11 +347,11 @@ export function MenusDialog({ target, onClose }: { target: UserDto | null; onClo
     if (!target) return;
     const cached = getSavedMenus(target.id);
     if (cached && cached.length > 0) {
-      setSel(cached);
+      setSel(cached.filter((x) => !isUuid(x)));
     } else if (target.menus && target.menus.length > 0) {
-      setSel(target.menus);
+      setSel(target.menus.filter((x) => !isUuid(x)));
     } else {
-      setSel([...(cat.defaultsFor(target.roleKey) ?? [])]);
+      setSel([...(cat.defaultsFor(target.roleKey) ?? [])].filter((x) => !isUuid(x)));
     }
   }, [target]); // eslint-disable-line react-hooks/exhaustive-deps
   const isPSA = Boolean(target?.isPrimarySuperAdmin || target?.roleKey === 'PRIMARY_SUPER_ADMIN');
@@ -458,9 +488,9 @@ export function PermissionsDialog({ target, onClose }: { target: UserDto | null;
       await adminService.setPermissions(target!.id, permKeys, permIds);
 
       // 2. Automatically sync menus corresponding to these permissions
-      const inferredMenus = getMenusForPermissions(permKeys);
-      const existingMenus = getSavedMenus(target!.id) || target!.menus || [];
-      const mergedMenus = Array.from(new Set([...existingMenus, ...inferredMenus]));
+      const inferredMenus = getMenusForPermissions(permKeys).filter((k) => !isUuid(k));
+      const existingMenus = (getSavedMenus(target!.id) || target!.menus || []).filter((k) => !isUuid(k));
+      const mergedMenus = Array.from(new Set([...existingMenus, ...inferredMenus])).filter((k) => !isUuid(k));
       setSavedMenus(target!.id, mergedMenus);
       await adminService.setMenus(target!.id, mergedMenus).catch(() => null);
 

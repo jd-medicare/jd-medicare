@@ -90,11 +90,19 @@ export default function MenusManagementPage({ user }: { user: SessionUserDto }) 
     }
   }
 
-  function handleDeleteCustom(key: string) {
+  async function handleDeleteCustom(key: string) {
     if (window.confirm(`Are you sure you want to remove menu "${key}"?`)) {
+      try {
+        await adminService.deleteMenu(key);
+      } catch (err) {
+        console.warn('Backend delete menu notice:', err);
+      }
       deleteCustomMenu(key);
       setCustomList(getCustomMenus());
       qc.invalidateQueries({ queryKey: ['menus'] });
+      qc.invalidateQueries({ queryKey: ['roles'] });
+      qc.invalidateQueries({ queryKey: ['users'] });
+      qc.invalidateQueries({ queryKey: ['session'] });
     }
   }
 
