@@ -195,9 +195,10 @@ function useCatalog(enabled: boolean) {
   const menuList = Array.from(new Set([...backendKeys, ...[...MENUS], ...customKeys]));
 
   const defaultsFor = (k: string) => {
+    if (k === 'AGENT') return ['CUSTOMERS'];
     const fromRole = roleList.find((r) => r.key === k)?.menus;
     if (fromRole && fromRole.length > 0) return fromRole.map((x) => x.toUpperCase());
-    return ((DEFAULT_ROLE_MENUS[k as RoleKey] || ['CUSTOMERS', 'CASES']) as readonly string[]).map((x) => x.toUpperCase());
+    return ((DEFAULT_ROLE_MENUS[k as RoleKey] || ['CUSTOMERS']) as readonly string[]).map((x) => x.toUpperCase());
   };
 
   return { roleList, menuList, defaultsFor, rawMenus: menus.data?.data, rawRoles: roles.data?.data };
@@ -207,7 +208,7 @@ export function CreateUserDialog({ open, onClose, canMenus = true }: { open: boo
   const blank = { email: '', fullName: '', phone: '', roleKey: 'AGENT', password: '' };
   const [f, setF] = useState(blank); const [err, setErr] = useState<Record<string, string>>({});
   const cat = useCatalog(open);
-  const [menus, setMenus] = useState<string[]>([...DEFAULT_ROLE_MENUS.AGENT]);
+  const [menus, setMenus] = useState<string[]>(['CUSTOMERS']);
   const [touched, setTouched] = useState(false);
   const qc = useQueryClient();
 

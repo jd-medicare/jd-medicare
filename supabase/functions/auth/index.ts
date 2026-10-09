@@ -152,14 +152,14 @@ Deno.serve(async (req: Request) => {
 
     if (!menus || menus.length === 0) {
       const ROLE_MENUS_FALLBACK: Record<string, string[]> = {
-        AGENT: ['DASHBOARD', 'CUSTOMERS', 'CASES'],
+        AGENT: ['CUSTOMERS'],
         TEAM_LEADER: ['DASHBOARD', 'CUSTOMERS', 'CASES', 'REPORTS'],
         OUTSOURCE: ['DASHBOARD', 'OUTSOURCE', 'REPORTS'],
         ADMIN: ['DASHBOARD', 'REPORTS', 'ADMINISTRATION'],
         CEO: ['DASHBOARD', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO'],
         PRIMARY_SUPER_ADMIN: ['DASHBOARD', 'CUSTOMERS', 'CASES', 'OUTSOURCE', 'REPORTS', 'FINANCE', 'EXPENSES', 'CEO', 'ADMINISTRATION'],
       };
-      menus = ROLE_MENUS_FALLBACK[auth.user.roleKey] || ['DASHBOARD', 'CUSTOMERS', 'CASES'];
+      menus = ROLE_MENUS_FALLBACK[auth.user.roleKey] || (auth.user.roleKey === 'AGENT' ? ['CUSTOMERS'] : ['DASHBOARD', 'CUSTOMERS', 'CASES']);
     }
 
     // Automatically ensure all menus corresponding to user permissions are open

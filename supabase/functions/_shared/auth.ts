@@ -142,7 +142,6 @@ export async function requireAuth(req: Request): Promise<AuthResult> {
       ],
       AGENT: [
         'customer:create', 'customer:view', 'customer:update',
-        'case:create', 'case:view', 'call_length:view', 'call_length:create', 'call_length:update',
       ],
     };
 

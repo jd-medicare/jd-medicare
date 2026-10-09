@@ -57,7 +57,7 @@ export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 
 const P = PERMISSIONS;
 export const DEFAULT_ROLE_PERMISSIONS: Record<RoleKey, readonly PermissionKey[]> = {
-  AGENT: ['customer:create', 'customer:view', 'case:create', 'case:view'],
+  AGENT: ['customer:create', 'customer:view'],
   TEAM_LEADER: ['customer:view', 'customer:update', 'case:view', 'case:update', 'call_length:view', 'call_length:create', 'call_length:update', 'report:view'],
   OUTSOURCE: ['case:view', 'case:accept', 'case:reject', 'call_length:view', 'report:view'],
   ADMIN: ['user:create', 'user:view', 'user:update', 'user:lock', 'user:unlock', 'menu:manage', 'report:view'],
@@ -67,7 +67,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleKey, readonly PermissionKey[]>
 
 /** ASSUMPTION: the contract lists menus but not per-role defaults; these are the defaults seeded. */
 export const DEFAULT_ROLE_MENUS: Record<RoleKey, readonly MenuKey[]> = {
-  AGENT: ['DASHBOARD', 'CUSTOMERS', 'CASES'],
+  AGENT: ['CUSTOMERS'],
   TEAM_LEADER: ['DASHBOARD', 'CUSTOMERS', 'CASES', 'REPORTS'],
   OUTSOURCE: ['DASHBOARD', 'OUTSOURCE', 'REPORTS'],
   ADMIN: ['DASHBOARD', 'REPORTS', 'ADMINISTRATION'],

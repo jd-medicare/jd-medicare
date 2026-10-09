@@ -206,7 +206,7 @@ export const adminService = {
                 ...rpcRes,
                 roleKey: b.roleKey,
                 roleName: b.roleKey,
-                menus: ['cases', 'customers'],
+                menus: b.menus || (b.roleKey === 'AGENT' ? ['CUSTOMERS'] : ['CASES', 'CUSTOMERS']),
                 permissions: [],
               } as any,
             };
@@ -251,7 +251,7 @@ export const adminService = {
               ...insertedUser,
               roleKey: b.roleKey,
               roleName: b.roleKey,
-              menus: ['cases', 'customers'],
+              menus: b.menus || (b.roleKey === 'AGENT' ? ['CUSTOMERS'] : ['CASES', 'CUSTOMERS']),
               permissions: [],
             } as any,
           };

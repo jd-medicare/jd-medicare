@@ -168,14 +168,15 @@ export const navFor = (u: SessionUserDto) => {
     if (u.roleKey === 'OUTSOURCE') list = [{ menu: 'OUTSOURCE', label: 'Outsource', path: '/outsource' }];
     else if (u.roleKey === 'CEO') list = [{ menu: 'CEO', label: 'CEO dashboard', path: '/ceo' }];
     else if (u.roleKey === 'TEAM_LEADER') list = [{ menu: 'CASES', label: 'Cases', path: '/cases' }];
-    else list = [{ menu: 'CUSTOMERS', label: 'New customer', path: '/customers/new' }, { menu: 'CASES', label: 'Cases', path: '/cases' }];
+    else if (u.roleKey === 'AGENT') list = [{ menu: 'CUSTOMERS', label: 'New customer', path: '/customers/new' }];
+    else list = [{ menu: 'CUSTOMERS', label: 'New customer', path: '/customers/new' }];
   }
 
   return list;
 };
 
 const HOME: Record<string, string> = {
-  AGENT: '/cases',
+  AGENT: '/customers/new',
   TEAM_LEADER: '/cases',
   OUTSOURCE: '/outsource',
   ADMIN: '/admin/users',

@@ -311,6 +311,13 @@ Deno.serve(async (req: Request) => {
     const menusParam = body.menus || body.menuIds;
     if (Array.isArray(menusParam) && menusParam.length > 0) {
       await syncUserMenus(client, authUserId, menusParam);
+    } else {
+      const { data: roleRow } = await client.from('roles').select('key').eq('id', roleId).maybeSingle();
+      const roleKey = roleRow?.key || '';
+      if (roleKey === 'AGENT') {
+        await syncUserMenus(client, authUserId, ['CUSTOMERS']);
+        await syncUserPermissions(client, authUserId, ['customer:create', 'customer:view']);
+      }
     }
 
     return jsonResponse({ data: newUser }, 201);
